@@ -9,7 +9,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from src.bot.states import DiagnosticStates
-from src.bot.keyboards.inline import get_restart_keyboard, get_report_keyboard
+from src.bot.keyboards.inline import get_restart_keyboard, get_report_keyboard, get_confirm_answer_keyboard
 from src.ai.question_gen import generate_question
 from src.ai.answer_analyzer import (
     analyze_answer, 
@@ -66,8 +66,8 @@ MIN_ANSWER_LENGTH = 20  # Минимальная длина ответа
 
 
 @router.message(DiagnosticStates.answering)
-async def process_answer(message: Message, state: FSMContext, bot: Bot):
-    """Обработка ответа на вопрос."""
+async def capture_answer(message: Message, state: FSMContext):
+    """Захват ответа и показ preview для подтверждения."""
     # Проверяем, что это текстовое сообщение
     if not message.text:
         await message.answer(
@@ -85,16 +85,79 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         )
         return
     
+    # Сохраняем черновик ответа
+    answer_text = message.text.strip()
+    await state.update_data(draft_answer=answer_text)
+    
+    # Показываем preview с кнопками подтверждения
+    preview_text = answer_text[:300] + "..." if len(answer_text) > 300 else answer_text
+    
+    await message.answer(
+        f"📝 <b>Твой ответ:</b>\n\n"
+        f"<i>{preview_text}</i>\n\n"
+        f"Отправить этот ответ?",
+        reply_markup=get_confirm_answer_keyboard(),
+    )
+    await state.set_state(DiagnosticStates.confirming_answer)
+
+
+@router.message(DiagnosticStates.confirming_answer)
+async def handle_new_answer_while_confirming(message: Message, state: FSMContext):
+    """Обработка нового текста во время подтверждения — обновляем черновик."""
+    if not message.text:
+        return
+    
+    # Обновляем черновик
+    answer_text = message.text.strip()
+    await state.update_data(draft_answer=answer_text)
+    
+    preview_text = answer_text[:300] + "..." if len(answer_text) > 300 else answer_text
+    
+    await message.answer(
+        f"📝 <b>Обновлённый ответ:</b>\n\n"
+        f"<i>{preview_text}</i>\n\n"
+        f"Отправить этот ответ?",
+        reply_markup=get_confirm_answer_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "edit_answer", DiagnosticStates.confirming_answer)
+async def edit_answer(callback: CallbackQuery, state: FSMContext):
+    """Возврат к редактированию ответа."""
+    data = await state.get_data()
+    current = data.get("current_question", 1)
+    question = data.get("current_question_text", "")
+    
+    await callback.message.edit_text(
+        f"<b>Вопрос {current}/{TOTAL_QUESTIONS}</b>\n\n{question}\n\n"
+        f"✏️ <i>Введи новый ответ:</i>"
+    )
+    await state.set_state(DiagnosticStates.answering)
+    await callback.answer("Введи новый ответ")
+
+
+@router.callback_query(F.data == "confirm_answer", DiagnosticStates.confirming_answer)
+async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Подтверждение ответа — запускаем анализ."""
     from aiogram.enums import ChatAction
     
     data = await state.get_data()
     current = data["current_question"]
+    answer_text = data.get("draft_answer", "")
+    
+    if not answer_text:
+        await callback.answer("❌ Ответ не найден", show_alert=True)
+        return
+    
+    await callback.answer("✅ Анализирую...")
     
     # Показываем typing indicator
-    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
     
     # Показываем, что анализируем с прогрессом
-    thinking_msg = await message.answer(f"🧠 Анализирую ответ {current}/{TOTAL_QUESTIONS}...\n\n<code>▓░░░░░░░░░</code> 10%")
+    thinking_msg = await callback.message.edit_text(
+        f"🧠 Анализирую ответ {current}/{TOTAL_QUESTIONS}...\n\n<code>▓░░░░░░░░░</code> 10%"
+    )
     
     # Сохраняем ответ
     conversation_history = data.get("conversation_history", [])
@@ -104,7 +167,7 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
     
     conversation_history.append({
         "question": current_question,
-        "answer": message.text,
+        "answer": answer_text,
     })
     
     # Подготавливаем данные
@@ -121,10 +184,11 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
             ("▓▓▓▓▓▓░░░░", "60%", "Выявляю инсайты..."),
             ("▓▓▓▓▓▓▓▓░░", "80%", "Генерирую вопрос..."),
         ]
+        chat_id = callback.message.chat.id
         try:
             for bar, pct, status in progress_states:
                 await asyncio.sleep(3)  # Обновляем каждые 3 сек
-                await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
                 try:
                     await thinking_msg.edit_text(
                         f"🧠 {status}\n\n<code>{bar}</code> {pct}"
@@ -147,7 +211,7 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         try:
             return await analyze_answer(
                 question=current_question,
-                answer=message.text,
+                answer=answer_text,
                 role=data["role"],
             )
         except AIServiceError as e:
@@ -220,7 +284,7 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
     # Уведомляем пользователя о проблемах с AI (если были)
     if ai_had_issues:
         try:
-            await message.answer(
+            await callback.message.answer(
                 "⚠️ <i>AI-сервис временно перегружен. Диагностика продолжается в упрощённом режиме.</i>",
             )
         except Exception:
@@ -237,7 +301,7 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
                     diagnostic_session_id=db_session_id,
                     question_number=current,
                     question_text=current_question,
-                    answer_text=message.text,
+                    answer_text=answer_text,
                     analysis=analysis,
                 )
         except Exception as e:
@@ -270,6 +334,7 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         await thinking_msg.edit_text(
             f"<b>Вопрос {next_question_num}/{TOTAL_QUESTIONS}</b>\n\n{next_question}",
         )
+        await state.set_state(DiagnosticStates.answering)
     else:
         # Все вопросы заданы — генерируем детальный отчёт
         from aiogram.enums import ChatAction
@@ -297,7 +362,7 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
             try:
                 for bar, pct, status in progress_states:
                     await asyncio.sleep(5)
-                    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+                    await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
                     try:
                         await thinking_msg.edit_text(
                             f"📊 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
@@ -369,13 +434,13 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         for i, part in enumerate(parts[1:], 1):
             # Последняя часть — с кнопкой
             if i == len(parts) - 1:
-                await message.answer(part, reply_markup=keyboard)
+                await callback.message.answer(part, reply_markup=keyboard)
             else:
-                await message.answer(part)
+                await callback.message.answer(part)
         
         # Если была только одна часть — добавляем кнопку отдельным сообщением
         if len(parts) == 1:
-            await message.answer("👆 Твой отчёт выше", reply_markup=keyboard)
+            await callback.message.answer("👆 Твой отчёт выше", reply_markup=keyboard)
 
 
 def generate_score_header(data: dict, scores: dict) -> str:

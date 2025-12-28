@@ -17,6 +17,9 @@ class DiagnosticStates(StatesGroup):
     # Процесс диагностики (10 вопросов)
     answering = State()
     
+    # Подтверждение ответа перед отправкой
+    confirming_answer = State()
+    
     # Завершение
     finished = State()
 

@@ -58,3 +58,12 @@ def get_report_keyboard(session_id: int) -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+
+def get_confirm_answer_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения ответа."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Отправить", callback_data="confirm_answer"),
+        InlineKeyboardButton(text="✏️ Изменить", callback_data="edit_answer"),
+    )
+    return builder.as_markup()
