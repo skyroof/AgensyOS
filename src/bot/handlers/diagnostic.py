@@ -78,11 +78,16 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         )
         return
     
+    from aiogram.enums import ChatAction
+    
     data = await state.get_data()
     current = data["current_question"]
     
-    # Показываем, что анализируем
-    thinking_msg = await message.answer("🧠 Анализирую ответ...")
+    # Показываем typing indicator
+    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    
+    # Показываем, что анализируем с прогрессом
+    thinking_msg = await message.answer(f"🧠 Анализирую ответ {current}/{TOTAL_QUESTIONS}...\n\n<code>▓░░░░░░░░░</code> 10%")
     
     # Сохраняем ответ
     conversation_history = data.get("conversation_history", [])
@@ -99,6 +104,31 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
     db_session_id = data.get("db_session_id")
     next_question_num = current + 1
     start_time = time.perf_counter()
+    
+    # === ПРОГРЕСС-БАР ===
+    async def update_progress():
+        """Обновляет прогресс-бар во время AI запросов."""
+        progress_states = [
+            ("▓▓░░░░░░░░", "20%", "Анализирую глубину..."),
+            ("▓▓▓▓░░░░░░", "40%", "Оцениваю структуру..."),
+            ("▓▓▓▓▓▓░░░░", "60%", "Выявляю инсайты..."),
+            ("▓▓▓▓▓▓▓▓░░", "80%", "Генерирую вопрос..."),
+        ]
+        try:
+            for bar, pct, status in progress_states:
+                await asyncio.sleep(3)  # Обновляем каждые 3 сек
+                await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+                try:
+                    await thinking_msg.edit_text(
+                        f"🧠 {status}\n\n<code>{bar}</code> {pct}"
+                    )
+                except Exception:
+                    pass  # Сообщение могло быть уже отредактировано
+        except asyncio.CancelledError:
+            pass  # Задача отменена — AI завершился раньше
+    
+    # Запускаем прогресс-бар в фоне
+    progress_task = asyncio.create_task(update_progress())
     
     # === ПАРАЛЛЕЛЬНЫЕ AI-ЗАПРОСЫ ===
     # Запускаем анализ ответа и генерацию следующего вопроса одновременно
@@ -143,6 +173,13 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
     else:
         analysis = await _analyze()
         next_question = None
+    
+    # Останавливаем прогресс-бар
+    progress_task.cancel()
+    try:
+        await progress_task
+    except asyncio.CancelledError:
+        pass
     
     duration_ms = (time.perf_counter() - start_time) * 1000
     logger.info(f"Answer {current} analyzed: {analysis.get('scores', {})} | Next Q generated | {duration_ms:.0f}ms total")
@@ -193,13 +230,42 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         )
     else:
         # Все вопросы заданы — генерируем детальный отчёт
+        from aiogram.enums import ChatAction
+        
         await state.update_data(
             conversation_history=conversation_history,
             analysis_history=analysis_history,
         )
         await state.set_state(DiagnosticStates.finished)
         
-        await thinking_msg.edit_text("📊 Генерирую детальный AI-отчёт...\n\n<i>Это может занять 15-30 секунд</i>")
+        await thinking_msg.edit_text(
+            "📊 <b>Генерирую детальный AI-отчёт...</b>\n\n"
+            "<code>▓░░░░░░░░░</code> 10%\n\n"
+            "<i>Анализирую все 10 ответов...</i>"
+        )
+        
+        # Прогресс-бар для отчёта
+        async def report_progress():
+            progress_states = [
+                ("▓▓▓░░░░░░░", "30%", "Выявляю паттерны..."),
+                ("▓▓▓▓▓░░░░░", "50%", "Формирую рекомендации..."),
+                ("▓▓▓▓▓▓▓░░░", "70%", "Оцениваю потенциал..."),
+                ("▓▓▓▓▓▓▓▓▓░", "90%", "Финализирую отчёт..."),
+            ]
+            try:
+                for bar, pct, status in progress_states:
+                    await asyncio.sleep(5)
+                    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+                    try:
+                        await thinking_msg.edit_text(
+                            f"📊 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
+                        )
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                pass
+        
+        report_task = asyncio.create_task(report_progress())
         
         # Генерируем детальный отчёт через AI
         report = ""
@@ -215,6 +281,13 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
             logger.error(f"Report generation failed: {e}")
             # Fallback на базовый отчёт
             report = await generate_basic_report(data, conversation_history, analysis_history)
+        
+        # Останавливаем прогресс-бар отчёта
+        report_task.cancel()
+        try:
+            await report_task
+        except asyncio.CancelledError:
+            pass
         
         # Рассчитываем баллы и добавляем шапку
         scores = calculate_category_scores(analysis_history)
