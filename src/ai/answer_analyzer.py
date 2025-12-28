@@ -135,6 +135,27 @@ ALL_METRICS = [
     "growth_orientation",
 ]
 
+# Все паттерны поведения
+ALL_PATTERNS = ["rehearsed", "evasive", "overconfident", "defensive", "authentic"]
+
+# Русские названия паттернов
+PATTERN_NAMES_RU = {
+    "rehearsed": "🎭 Заученный ответ",
+    "evasive": "🌊 Уклончивость",
+    "overconfident": "💪 Самоуверенность",
+    "defensive": "🛡️ Защитная позиция",
+    "authentic": "💎 Аутентичность",
+}
+
+# Влияние паттернов на метрики (корректировки)
+PATTERN_ADJUSTMENTS = {
+    "rehearsed": {"honesty": -1, "self_awareness": -1},
+    "evasive": {"honesty": -2, "depth": -1},
+    "overconfident": {"self_awareness": -2, "growth_orientation": -1},
+    "defensive": {"honesty": -1, "self_awareness": -1, "growth_orientation": -1},
+    "authentic": {"honesty": +1, "self_awareness": +1},  # Позитивный бонус
+}
+
 # Русские названия метрик для отчёта
 METRIC_NAMES_RU = {
     # Hard Skills
@@ -182,6 +203,8 @@ METRIC_CATEGORIES = {
 # Дефолтный анализ на случай ошибки
 DEFAULT_ANALYSIS = {
     "scores": {metric: 5 for metric in ALL_METRICS},
+    "patterns": {pattern: False for pattern in ALL_PATTERNS},
+    "detected_patterns": [],
     "key_insights": ["Анализ недоступен"],
     "gaps": [],
     "hypothesis": "Требуется дополнительный анализ",
@@ -238,6 +261,35 @@ async def analyze_answer(question: str, answer: str, role: str) -> dict:
             analysis["gaps"] = []
         if "hypothesis" not in analysis:
             analysis["hypothesis"] = ""
+        
+        # === ОБРАБОТКА ПАТТЕРНОВ ===
+        if "patterns" not in analysis:
+            analysis["patterns"] = {p: False for p in ALL_PATTERNS}
+        else:
+            # Валидация паттернов
+            for pattern in ALL_PATTERNS:
+                if pattern not in analysis["patterns"]:
+                    analysis["patterns"][pattern] = False
+                elif not isinstance(analysis["patterns"][pattern], bool):
+                    analysis["patterns"][pattern] = False
+        
+        # Применяем корректировки на основе паттернов
+        detected_patterns = []
+        for pattern, is_detected in analysis["patterns"].items():
+            if is_detected and pattern in PATTERN_ADJUSTMENTS:
+                detected_patterns.append(pattern)
+                adjustments = PATTERN_ADJUSTMENTS[pattern]
+                for metric, delta in adjustments.items():
+                    if metric in analysis["scores"]:
+                        new_value = analysis["scores"][metric] + delta
+                        analysis["scores"][metric] = max(0, min(10, new_value))
+        
+        # Логируем найденные паттерны
+        if detected_patterns:
+            logger.info(f"Detected patterns: {detected_patterns}")
+            analysis["detected_patterns"] = detected_patterns
+        else:
+            analysis["detected_patterns"] = []
         
         # Логируем успешный парсинг
         log_ai_response("analysis", response, success=True)
