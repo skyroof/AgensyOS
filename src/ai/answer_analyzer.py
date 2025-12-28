@@ -323,3 +323,95 @@ def calculate_category_scores(analyses: list[dict]) -> dict:
         "raw_averages": avg,  # Все 12 метрик для детального отчёта
     }
 
+
+# Ожидаемые баллы для каждого уровня опыта
+EXPERIENCE_BASELINES = {
+    "junior": {
+        "expected_total": 35,  # Ожидаемый балл для Junior
+        "exceeds_threshold": 50,  # Если выше — превышает ожидания
+        "below_threshold": 25,  # Если ниже — ниже ожиданий
+        "level_name": "Junior",
+    },
+    "middle": {
+        "expected_total": 55,
+        "exceeds_threshold": 70,
+        "below_threshold": 40,
+        "level_name": "Middle",
+    },
+    "senior": {
+        "expected_total": 70,
+        "exceeds_threshold": 85,
+        "below_threshold": 55,
+        "level_name": "Senior",
+    },
+    "lead": {
+        "expected_total": 80,
+        "exceeds_threshold": 90,
+        "below_threshold": 65,
+        "level_name": "Lead",
+    },
+}
+
+
+def calibrate_scores(scores: dict, experience: str) -> dict:
+    """
+    Калибровать оценки относительно ожиданий для уровня опыта.
+    
+    Args:
+        scores: Словарь с баллами из calculate_category_scores()
+        experience: Уровень опыта (junior/middle/senior/lead)
+        
+    Returns:
+        Словарь с добавленной калибровкой:
+        - expectation: "exceeds" / "meets" / "below"
+        - expectation_ru: русское описание
+        - expected_total: ожидаемый балл для этого уровня
+        - delta: разница с ожиданием
+        - percentile_in_level: условный перцентиль внутри уровня
+    """
+    baseline = EXPERIENCE_BASELINES.get(experience, EXPERIENCE_BASELINES["middle"])
+    total = scores.get("total", 0)
+    
+    # Определяем соответствие ожиданиям
+    if total >= baseline["exceeds_threshold"]:
+        expectation = "exceeds"
+        expectation_ru = "🚀 Превышает ожидания"
+        expectation_emoji = "🟢"
+    elif total >= baseline["below_threshold"]:
+        expectation = "meets"
+        expectation_ru = "✅ Соответствует уровню"
+        expectation_emoji = "🟡"
+    else:
+        expectation = "below"
+        expectation_ru = "📈 Есть зоны для роста"
+        expectation_emoji = "🟠"
+    
+    # Рассчитываем дельту относительно ожидания
+    delta = total - baseline["expected_total"]
+    delta_text = f"+{delta}" if delta > 0 else str(delta)
+    
+    # Условный перцентиль внутри уровня (0-100)
+    # Формула: (total - below) / (exceeds - below) * 100
+    range_size = baseline["exceeds_threshold"] - baseline["below_threshold"]
+    if range_size > 0:
+        percentile = ((total - baseline["below_threshold"]) / range_size) * 100
+        percentile = max(0, min(100, percentile))
+    else:
+        percentile = 50
+    
+    # Добавляем калибровку к существующим scores
+    calibrated = scores.copy()
+    calibrated.update({
+        "experience": experience,
+        "experience_level": baseline["level_name"],
+        "expectation": expectation,
+        "expectation_ru": expectation_ru,
+        "expectation_emoji": expectation_emoji,
+        "expected_total": baseline["expected_total"],
+        "delta": delta,
+        "delta_text": delta_text,
+        "percentile_in_level": round(percentile),
+    })
+    
+    return calibrated
+

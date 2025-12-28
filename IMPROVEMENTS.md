@@ -89,11 +89,12 @@
 - [x] Обновить формат отчёта (детализация по 12 метрикам)
 - [x] Русские названия всех метрик (`METRIC_NAMES_RU`)
 
-### 2.2 Калибровка по опыту
-- [ ] Создать `calibrate_scores(scores, experience)` функцию
-- [ ] Разные baseline для junior/middle/senior/lead
-- [ ] Добавить в отчёт: "exceeds/meets/below expectations"
-- [ ] Визуализация: цветовая индикация в отчёте
+### 2.2 Калибровка по опыту ✅
+- [x] Создать `calibrate_scores(scores, experience)` функцию
+- [x] Разные baseline для junior/middle/senior/lead
+- [x] Добавить в отчёт: "Превышает/Соответствует/Есть зоны роста"
+- [x] Перцентиль внутри уровня опыта
+- [x] Дельта от ожидаемого балла
 
 ### 2.3 Адаптивная сложность вопросов
 - [ ] Создать `get_question_difficulty(analysis_history)` функцию

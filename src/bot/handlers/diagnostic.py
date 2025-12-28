@@ -14,6 +14,7 @@ from src.ai.question_gen import generate_question
 from src.ai.answer_analyzer import (
     analyze_answer, 
     calculate_category_scores,
+    calibrate_scores,
     METRIC_NAMES_RU,
     METRIC_CATEGORIES,
 )
@@ -330,8 +331,9 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         except asyncio.CancelledError:
             pass
         
-        # Рассчитываем баллы и добавляем шапку
-        scores = calculate_category_scores(analysis_history)
+        # Рассчитываем баллы и калибруем по опыту
+        raw_scores = calculate_category_scores(analysis_history)
+        scores = calibrate_scores(raw_scores, data.get("experience", "middle"))
         header = generate_score_header(data, scores)
         
         # Сохраняем результат в БД
@@ -377,9 +379,16 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
 
 
 def generate_score_header(data: dict, scores: dict) -> str:
-    """Генерация шапки с баллами и детализацией по 12 метрикам."""
+    """Генерация шапки с баллами, калибровкой и детализацией по 12 метрикам."""
     total = scores["total"]
     raw_avg = scores.get("raw_averages", {})
+    
+    # Калибровка по опыту
+    expectation_ru = scores.get("expectation_ru", "")
+    expected_total = scores.get("expected_total", 50)
+    delta_text = scores.get("delta_text", "0")
+    percentile = scores.get("percentile_in_level", 50)
+    experience_level = scores.get("experience_level", "Middle")
     
     # Определяем уровень и эмодзи
     if total >= 80:
@@ -419,11 +428,17 @@ def generate_score_header(data: dict, scores: dict) -> str:
     return f"""🎯 <b>ДИАГНОСТИКА ЗАВЕРШЕНА</b>
 
 <b>Профиль:</b> {data['role_name']}
-<b>Опыт:</b> {data['experience_name']}
-<b>Уровень:</b> {level}
+<b>Заявленный опыт:</b> {data['experience_name']}
+<b>Выявленный уровень:</b> {level}
 
 <b>📊 ОБЩИЙ БАЛЛ: {total}/100</b>
 <code>{bar}</code>
+
+<b>📋 КАЛИБРОВКА ДЛЯ {experience_level.upper()}</b>
+{expectation_ru}
+• Ожидание для {experience_level}: {expected_total} баллов
+• Ваш результат: {total} баллов ({delta_text})
+• Перцентиль в группе: топ-{100 - percentile}%
 
 ━━━━━━━━━━━━━━━━━━━━
 
