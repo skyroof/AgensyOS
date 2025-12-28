@@ -1,0 +1,31 @@
+# Telegram Bot
+aiogram==3.13.1
+pydantic==2.9.2
+pydantic-settings==2.6.1
+
+# AI (RouterAI использует OpenAI-совместимый API)
+openai==1.57.4
+
+# Database
+asyncpg==0.30.0
+aiosqlite==0.20.0
+sqlalchemy[asyncio]==2.0.36
+alembic==1.14.0
+redis==5.2.1
+
+# Utils
+python-dotenv==1.0.1
+httpx==0.28.1
+
+# PDF Generation
+reportlab==4.2.5
+
+# Voice (Whisper)
+# openai-whisper==20231117  # опционально, для локального распознавания
+
+# Dev
+pytest==8.3.4
+pytest-asyncio==0.25.0
+black==24.10.0
+ruff==0.8.4
+
