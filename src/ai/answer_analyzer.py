@@ -207,6 +207,7 @@ DEFAULT_ANALYSIS = {
     "detected_patterns": [],
     "key_insights": ["Анализ недоступен"],
     "gaps": [],
+    "red_flags": [],
     "hypothesis": "Требуется дополнительный анализ",
 }
 
@@ -259,6 +260,8 @@ async def analyze_answer(question: str, answer: str, role: str) -> dict:
             analysis["key_insights"] = []
         if "gaps" not in analysis:
             analysis["gaps"] = []
+        if "red_flags" not in analysis:
+            analysis["red_flags"] = []
         if "hypothesis" not in analysis:
             analysis["hypothesis"] = ""
         
