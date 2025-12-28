@@ -86,7 +86,8 @@
   - [x] Thinking: `depth`, `structure`, `systems_thinking`, `creativity`
   - [x] Mindset: `honesty`, `growth_orientation`
 - [x] Обновить `calculate_category_scores()` для новых метрик
-- [ ] Обновить формат отчёта (детализация по 12 метрикам)
+- [x] Обновить формат отчёта (детализация по 12 метрикам)
+- [x] Русские названия всех метрик (`METRIC_NAMES_RU`)
 
 ### 2.2 Калибровка по опыту
 - [ ] Создать `calibrate_scores(scores, experience)` функцию

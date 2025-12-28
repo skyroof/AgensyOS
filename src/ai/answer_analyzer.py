@@ -135,6 +135,50 @@ ALL_METRICS = [
     "growth_orientation",
 ]
 
+# Русские названия метрик для отчёта
+METRIC_NAMES_RU = {
+    # Hard Skills
+    "expertise": "Экспертиза",
+    "methodology": "Методологии",
+    "tools_proficiency": "Инструменты",
+    # Soft Skills
+    "articulation": "Ясность речи",
+    "self_awareness": "Самоосознание",
+    "conflict_handling": "Работа с конфликтами",
+    # Thinking
+    "depth": "Глубина анализа",
+    "structure": "Структурность",
+    "systems_thinking": "Системное мышление",
+    "creativity": "Креативность",
+    # Mindset
+    "honesty": "Честность",
+    "growth_orientation": "Ориентация на рост",
+}
+
+# Группировка метрик по категориям
+METRIC_CATEGORIES = {
+    "hard_skills": {
+        "name": "🔧 Hard Skills",
+        "metrics": ["expertise", "methodology", "tools_proficiency"],
+        "max_score": 30,
+    },
+    "soft_skills": {
+        "name": "🤝 Soft Skills", 
+        "metrics": ["articulation", "self_awareness", "conflict_handling"],
+        "max_score": 25,
+    },
+    "thinking": {
+        "name": "🧠 Мышление",
+        "metrics": ["depth", "structure", "systems_thinking", "creativity"],
+        "max_score": 25,
+    },
+    "mindset": {
+        "name": "💫 Mindset",
+        "metrics": ["honesty", "growth_orientation"],
+        "max_score": 20,
+    },
+}
+
 # Дефолтный анализ на случай ошибки
 DEFAULT_ANALYSIS = {
     "scores": {metric: 5 for metric in ALL_METRICS},

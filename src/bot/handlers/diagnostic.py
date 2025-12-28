@@ -11,7 +11,12 @@ from aiogram.fsm.context import FSMContext
 from src.bot.states import DiagnosticStates
 from src.bot.keyboards.inline import get_restart_keyboard, get_report_keyboard
 from src.ai.question_gen import generate_question
-from src.ai.answer_analyzer import analyze_answer, calculate_category_scores
+from src.ai.answer_analyzer import (
+    analyze_answer, 
+    calculate_category_scores,
+    METRIC_NAMES_RU,
+    METRIC_CATEGORIES,
+)
 from src.ai.report_gen import generate_detailed_report, split_message
 from src.ai.client import AIServiceError
 from src.db import get_session
@@ -372,8 +377,9 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
 
 
 def generate_score_header(data: dict, scores: dict) -> str:
-    """Генерация шапки с баллами."""
+    """Генерация шапки с баллами и детализацией по 12 метрикам."""
     total = scores["total"]
+    raw_avg = scores.get("raw_averages", {})
     
     # Определяем уровень и эмодзи
     if total >= 80:
@@ -392,6 +398,24 @@ def generate_score_header(data: dict, scores: dict) -> str:
         level = "🌱 Junior"
         bar = "█████░░░░░░░░░░░░░░░░░░░░"
     
+    # Генерируем детализацию по категориям
+    details = []
+    for cat_key, cat_info in METRIC_CATEGORIES.items():
+        cat_score = scores.get(cat_key, 0)
+        cat_max = cat_info["max_score"]
+        details.append(f"\n<b>{cat_info['name']}</b>: {cat_score}/{cat_max}")
+        
+        # Детализация по метрикам внутри категории
+        for metric in cat_info["metrics"]:
+            metric_value = raw_avg.get(metric, 5)
+            metric_name = METRIC_NAMES_RU.get(metric, metric)
+            # Мини-бар для каждой метрики
+            filled = int(metric_value)
+            mini_bar = "▓" * filled + "░" * (10 - filled)
+            details.append(f"  <code>{mini_bar}</code> {metric_name}: {metric_value:.1f}")
+    
+    details_text = "\n".join(details)
+    
     return f"""🎯 <b>ДИАГНОСТИКА ЗАВЕРШЕНА</b>
 
 <b>Профиль:</b> {data['role_name']}
@@ -401,11 +425,10 @@ def generate_score_header(data: dict, scores: dict) -> str:
 <b>📊 ОБЩИЙ БАЛЛ: {total}/100</b>
 <code>{bar}</code>
 
-<b>Breakdown:</b>
-• Hard Skills: <b>{scores['hard_skills']}</b>/30
-• Soft Skills: <b>{scores['soft_skills']}</b>/25
-• Thinking: <b>{scores['thinking']}</b>/25
-• Mindset: <b>{scores['mindset']}</b>/20
+━━━━━━━━━━━━━━━━━━━━
+
+<b>📈 ДЕТАЛИЗАЦИЯ ПО КОМПЕТЕНЦИЯМ</b>
+{details_text}
 
 ━━━━━━━━━━━━━━━━━━━━
 
