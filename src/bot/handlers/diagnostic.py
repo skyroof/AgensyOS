@@ -13,6 +13,7 @@ from src.bot.keyboards.inline import get_restart_keyboard, get_report_keyboard
 from src.ai.question_gen import generate_question
 from src.ai.answer_analyzer import analyze_answer, calculate_category_scores
 from src.ai.report_gen import generate_detailed_report, split_message
+from src.ai.client import AIServiceError
 from src.db import get_session
 from src.db.repositories import save_answer, update_session_progress, complete_session
 
@@ -132,15 +133,27 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
     
     # === ПАРАЛЛЕЛЬНЫЕ AI-ЗАПРОСЫ ===
     # Запускаем анализ ответа и генерацию следующего вопроса одновременно
+    ai_had_issues = False  # Флаг для уведомления пользователя
     
     async def _analyze():
         """Анализ текущего ответа."""
+        nonlocal ai_had_issues
         try:
             return await analyze_answer(
                 question=current_question,
                 answer=message.text,
                 role=data["role"],
             )
+        except AIServiceError as e:
+            logger.error(f"AI service error during analysis: {e}")
+            ai_had_issues = True
+            return {
+                "scores": {"depth": 5, "self_awareness": 5, "structure": 5, "honesty": 5, "expertise": 5},
+                "key_insights": ["⚠️ Анализ выполнен с ограничениями"],
+                "gaps": [],
+                "hypothesis": "AI временно недоступен",
+                "_ai_error": True,
+            }
         except Exception as e:
             logger.error(f"Analysis failed: {e}")
             return {
@@ -152,6 +165,7 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
     
     async def _generate_next():
         """Генерация следующего вопроса (если нужен)."""
+        nonlocal ai_had_issues
         if next_question_num > TOTAL_QUESTIONS:
             return None
         try:
@@ -161,11 +175,24 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
                 experience=data["experience_name"],
                 question_number=next_question_num,
                 conversation_history=conversation_history,
-                analysis_history=analysis_history,  # Используем текущую историю
+                analysis_history=analysis_history,
             )
+        except AIServiceError as e:
+            logger.error(f"AI service error during question gen: {e}")
+            ai_had_issues = True
+            # Fallback вопросы
+            fallback_questions = [
+                "Расскажи о сложном проекте, где тебе пришлось принимать нестандартные решения.",
+                "Как ты справляешься с дедлайнами и приоритизацией задач?",
+                "Опиши ситуацию, когда тебе приходилось работать с неопределённостью.",
+                "Что для тебя означает качественная работа?",
+                "Расскажи о своём подходе к обучению новым навыкам.",
+            ]
+            idx = (next_question_num - 1) % len(fallback_questions)
+            return fallback_questions[idx]
         except Exception as e:
             logger.error(f"Question generation failed: {e}")
-            return f"Вопрос {next_question_num}: Расскажи подробнее о своём опыте."
+            return f"Вопрос {next_question_num}: Расскажи подробнее о своём опыте и подходе к работе."
     
     # Запускаем параллельно
     if next_question_num <= TOTAL_QUESTIONS:
@@ -183,6 +210,15 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
     
     duration_ms = (time.perf_counter() - start_time) * 1000
     logger.info(f"Answer {current} analyzed: {analysis.get('scores', {})} | Next Q generated | {duration_ms:.0f}ms total")
+    
+    # Уведомляем пользователя о проблемах с AI (если были)
+    if ai_had_issues:
+        try:
+            await message.answer(
+                "⚠️ <i>AI-сервис временно перегружен. Диагностика продолжается в упрощённом режиме.</i>",
+            )
+        except Exception:
+            pass
     
     analysis_history.append(analysis)
     
