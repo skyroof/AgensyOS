@@ -1,502 +1,935 @@
-# 🎯 DEEP DIAGNOSTIC BOT — Roadmap
+# 🚀 ROADMAP v2: План развития Deep Diagnostic Bot
 
-## Концепция: Адаптивная глубинная диагностика специалистов
-
-**Цель:** Создать AI-powered Telegram-бота, который за 10 вопросов с хирургической точностью определяет уровень специалиста (0-100), раскрывая как профессиональные компетенции, так и личностные качества.
+> Анализ текущего состояния + стратегия улучшений
 
 ---
 
-## 📊 Архитектура оценки
+## 📊 Аудит текущей системы
 
-### Финальный скор: 0-100 баллов
+### Что работает хорошо ✅
 
-Декомпозиция оценки:
+| Компонент | Статус | Комментарий |
+|-----------|--------|-------------|
+| Базовый flow | ✅ | 10 вопросов → анализ → отчёт |
+| AI-генерация вопросов | ✅ | Адаптивные вопросы через Claude |
+| Анализ ответов | ⚠️ | Работает, но JSON parsing нестабилен |
+| Скоринг | ✅ | 4 категории, взвешенный расчёт |
+| PDF экспорт | ✅ | Полноценный отчёт |
+| Голосовые сообщения | ✅ | Whisper через RouterAI |
+| Persistence | ✅ | SQLite + SQLAlchemy |
+| Логирование | ✅ | Middleware + структурированные логи |
 
-| Категория | Вес | Что измеряем |
-|-----------|-----|--------------|
-| **Hard Skills** | 30% | Техническое мастерство, инструменты, методологии |
-| **Soft Skills** | 25% | Коммуникация, лидерство, эмпатия, конфликты |
-| **Thinking** | 25% | Системное мышление, креативность, аналитика |
-| **Mindset** | 20% | Ценности, мотивация, зрелость, самоосознание |
+### Критические проблемы 🔴
+
+#### 1. JSON Parsing Failures (7 из 10 ответов)
+```
+ERROR - Failed to parse AI response as JSON: Extra data: line 21 column 1 (char 1598)
+```
+
+**Текущий код** (`src/ai/answer_analyzer.py:51-57`):
+```python
+clean_response = response.strip()
+if clean_response.startswith("```"):
+    lines = clean_response.split("\n")
+    clean_response = "\n".join(lines[1:-1])
+
+analysis = json.loads(clean_response)  # ← ПАДАЕТ
+```
+
+**Проблема**: AI возвращает JSON + комментарии/объяснения после него.
+
+**Решение**:
+```python
+import re
+
+def extract_json(text: str) -> dict:
+    """Извлечь JSON из текста с мусором."""
+    # Способ 1: JSONDecoder.raw_decode
+    try:
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(text.strip())
+        return obj
+    except json.JSONDecodeError:
+        pass
+    
+    # Способ 2: Regex для извлечения JSON объекта
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    
+    raise ValueError("No valid JSON found")
+```
+
+#### 2. Медленные ответы (25-90 секунд)
+
+**Причины**:
+- Последовательные запросы: анализ → генерация вопроса
+- Большой контекст передаётся каждый раз
+- Нет streaming
+
+**Текущий тайминг по логам**:
+| Операция | Среднее время |
+|----------|---------------|
+| Анализ ответа | 18-26 сек |
+| Генерация вопроса | 6-12 сек |
+| Генерация отчёта | 60-90 сек |
+| **Итого на вопрос** | **25-35 сек** |
+
+**Решения**:
+1. Параллельные запросы (анализ + генерация)
+2. Streaming для UX
+3. Сокращение контекста
+
+#### 3. Fallback на дефолтные оценки
+
+При ошибке парсинга все метрики = 5. Это **искажает 70% результатов**.
+
+```python
+DEFAULT_ANALYSIS = {
+    "scores": {
+        "depth": 5,
+        "self_awareness": 5,  # ← Середина шкалы
+        ...
+    },
+}
+```
 
 ---
 
-## 🧠 Механика адаптивных вопросов
+## 🎯 ФАЗА 1: Стабилизация (3-5 дней)
 
-### Принцип "Drilling Down"
+### 1.1 Исправить JSON parsing
 
+```python
+# src/ai/answer_analyzer.py
+
+import re
+import json
+from json import JSONDecoder
+
+def robust_json_parse(text: str) -> dict:
+    """
+    Робастный парсинг JSON из ответа AI.
+    Обрабатывает:
+    - JSON в markdown блоках
+    - JSON с trailing text
+    - JSON с комментариями
+    """
+    text = text.strip()
+    
+    # 1. Убираем markdown code blocks
+    if text.startswith("```"):
+        # Ищем конец блока
+        end_idx = text.rfind("```")
+        if end_idx > 3:
+            text = text[text.find("\n")+1:end_idx]
+    
+    # 2. Пробуем raw_decode (игнорирует trailing data)
+    try:
+        decoder = JSONDecoder()
+        obj, idx = decoder.raw_decode(text)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    
+    # 3. Regex: извлекаем первый валидный JSON объект
+    # Ищем { ... } с учётом вложенности
+    brace_count = 0
+    start_idx = None
+    
+    for i, char in enumerate(text):
+        if char == '{':
+            if brace_count == 0:
+                start_idx = i
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0 and start_idx is not None:
+                try:
+                    return json.loads(text[start_idx:i+1])
+                except json.JSONDecodeError:
+                    start_idx = None
+    
+    raise ValueError(f"No valid JSON found in: {text[:200]}...")
+
+
+async def analyze_answer(question: str, answer: str, role: str) -> dict:
+    """Улучшенный анализ с робастным парсингом."""
+    try:
+        messages = get_analysis_prompt(question, answer, role)
+        response = await chat_completion(messages=messages, temperature=0.3, max_tokens=1000)
+        
+        analysis = robust_json_parse(response)
+        
+        # Валидация структуры
+        if "scores" not in analysis:
+            raise ValueError("Missing 'scores' in analysis")
+        
+        # Валидация значений (0-10)
+        for key, value in analysis["scores"].items():
+            if not isinstance(value, (int, float)) or not 0 <= value <= 10:
+                analysis["scores"][key] = 5  # Корректируем невалидные
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}, response: {response[:500] if 'response' in dir() else 'N/A'}")
+        # Логируем сырой ответ для отладки
+        return DEFAULT_ANALYSIS
 ```
-Вопрос 1: Широкий контекст → Выявление области силы/слабости
-    ↓
-Вопрос 2: Углубление в выявленную область
-    ↓
-Вопрос 3: Провокация / стресс-тест выявленного паттерна
-    ↓
-...и так далее, каждый вопрос основан на анализе ВСЕХ предыдущих ответов
+
+### 1.2 Параллельные AI-запросы
+
+```python
+# src/bot/handlers/diagnostic.py
+
+import asyncio
+
+async def process_answer(message: Message, state: FSMContext, bot: Bot):
+    """Оптимизированная обработка с параллельными запросами."""
+    
+    # ... валидация ...
+    
+    thinking_msg = await message.answer("🧠 Анализирую ответ...")
+    
+    # ПАРАЛЛЕЛЬНО: анализ + генерация следующего вопроса
+    analysis_task = asyncio.create_task(
+        analyze_answer(current_question, message.text, data["role"])
+    )
+    
+    next_question_num = data["current_question"] + 1
+    question_task = None
+    
+    if next_question_num <= TOTAL_QUESTIONS:
+        # Начинаем генерацию следующего вопроса сразу
+        # (используем текущую историю, анализ добавим потом)
+        question_task = asyncio.create_task(
+            generate_question(
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data["experience_name"],
+                question_number=next_question_num,
+                conversation_history=conversation_history,
+                analysis_history=analysis_history,  # Без текущего анализа
+            )
+        )
+    
+    # Ждём анализ
+    analysis = await analysis_task
+    analysis_history.append(analysis)
+    
+    # Если есть задача на вопрос — ждём её тоже
+    if question_task:
+        next_question = await question_task
+    
+    # Время ответа: ~18-26 сек вместо 25-35 сек (-30%)
 ```
 
-### Типы вопросов (ротация для полноты картины)
+### 1.3 Streaming для UX
 
-1. **Ситуационные** — "Расскажи про случай, когда..."
-2. **Гипотетические** — "Что бы ты сделал, если..."
-3. **Рефлексивные** — "Почему ты принял такое решение?"
-4. **Провокационные** — "А если бы [противоположный сценарий]?"
-5. **Метакогнитивные** — "Как ты понимаешь, что ты делаешь это хорошо?"
-6. **Ценностные** — "Что для тебя важнее: X или Y?"
-7. **Проективные** — "Опиши идеального [специалиста в твоей роли]"
-8. **Стресс-вопросы** — Намеренное давление для проверки реакции
+```python
+# src/ai/client.py
+
+async def chat_completion_stream(
+    messages: list[dict],
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+) -> AsyncGenerator[str, None]:
+    """Streaming версия для улучшения UX."""
+    settings = get_settings()
+    client = get_ai_client()
+    
+    stream = await client.chat.completions.create(
+        model=settings.ai_model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    
+    async for chunk in stream:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
+# Использование для отчёта:
+async def generate_report_with_progress(callback, ...):
+    """Генерация отчёта с live-обновлением."""
+    full_text = ""
+    last_update = 0
+    
+    async for chunk in chat_completion_stream(messages, ...):
+        full_text += chunk
+        
+        # Обновляем сообщение каждые 500 символов
+        if len(full_text) - last_update > 500:
+            await callback.message.edit_text(
+                f"📊 Генерирую отчёт...\n\n{full_text[:1000]}..."
+            )
+            last_update = len(full_text)
+    
+    return full_text
+```
+
+### 1.4 Логирование сырых ответов AI
+
+```python
+# Добавить в analyze_answer и другие AI-функции
+
+import os
+from datetime import datetime
+
+DEBUG_LOG_DIR = "debug_logs"
+
+def log_ai_response(prompt_type: str, response: str, success: bool):
+    """Сохранять сырые ответы AI для отладки."""
+    os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    status = "ok" if success else "fail"
+    filename = f"{DEBUG_LOG_DIR}/{timestamp}_{prompt_type}_{status}.txt"
+    
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(response)
+```
 
 ---
 
-## 👤 Профили специалистов
+## 🎯 ФАЗА 2: Улучшение качества диагностики (1-2 недели)
 
-### Дизайнер (UI/UX/Product Designer)
+### 2.1 Расширенные метрики
 
-#### Hard Skills (30%)
-- Владение инструментами (Figma, Principle, etc.)
-- Понимание UI-паттернов и гайдлайнов
-- Прототипирование и анимация
-- Design Systems
-- Исследования (UX Research)
-- Метрики и аналитика дизайна
-- Accessibility
-- Работа с разработкой (handoff)
+**Текущие (5)**: depth, self_awareness, structure, honesty, expertise
 
-#### Soft Skills (25%)
-- Презентация и защита решений
-- Работа с фидбэком и критикой
-- Коммуникация с заказчиками
-- Менторинг джунов
-- Управление ожиданиями
+**Новые (12)**:
+```python
+METRICS_V2 = {
+    # Когнитивные (Thinking 25%)
+    "analytical_depth": "Глубина анализа проблем",
+    "systems_thinking": "Системное видение",
+    "creativity": "Нестандартные решения",
+    
+    # Профессиональные (Hard Skills 30%)
+    "domain_expertise": "Экспертиза в предметной области",
+    "methodology": "Владение методологиями",
+    "tools_proficiency": "Владение инструментами",
+    
+    # Коммуникативные (Soft Skills 25%)
+    "articulation": "Ясность изложения",
+    "empathy": "Понимание стейкхолдеров",
+    "conflict_handling": "Работа с конфликтами",
+    
+    # Личностные (Mindset 20%)
+    "self_reflection": "Рефлексия и самокритика",
+    "growth_orientation": "Ориентация на рост",
+    "integrity": "Честность и этика",
+}
+```
 
-#### Thinking (25%)
-- Системное мышление (видит экосистему, а не экраны)
-- Эмпатия к пользователю
-- Креативность vs шаблонность
-- Умение упрощать сложное
-- Приоритизация (что важно, что нет)
+### 2.2 Калибровка оценок по опыту
 
-#### Mindset (20%)
-- Отношение к ошибкам
-- Амбиции и рост
-- Автономность vs зависимость
-- Ответственность за результат
-- Этика и честность
+```python
+def calibrate_scores(scores: dict, experience: str, role: str) -> dict:
+    """
+    Калибровка оценок относительно заявленного опыта.
+    
+    Junior с оценкой 7 за expertise — это хорошо.
+    Lead с оценкой 7 за expertise — это посредственно.
+    """
+    experience_multipliers = {
+        "junior": {"baseline": 4, "excellent_threshold": 6},
+        "middle": {"baseline": 5, "excellent_threshold": 7},
+        "senior": {"baseline": 6, "excellent_threshold": 8},
+        "lead": {"baseline": 7, "excellent_threshold": 9},
+    }
+    
+    calibrated = {}
+    config = experience_multipliers.get(experience, experience_multipliers["middle"])
+    
+    for metric, value in scores.items():
+        # Нормализуем относительно ожиданий для уровня
+        baseline = config["baseline"]
+        if value >= config["excellent_threshold"]:
+            calibrated[metric] = {"value": value, "assessment": "exceeds_expectations"}
+        elif value >= baseline:
+            calibrated[metric] = {"value": value, "assessment": "meets_expectations"}
+        else:
+            calibrated[metric] = {"value": value, "assessment": "below_expectations"}
+    
+    return calibrated
+```
+
+### 2.3 Адаптивная сложность вопросов
+
+```python
+# src/ai/question_gen.py
+
+def get_question_difficulty(analysis_history: list[dict]) -> str:
+    """Определить сложность следующего вопроса."""
+    if not analysis_history:
+        return "standard"
+    
+    # Средняя оценка за последние 3 ответа
+    recent = analysis_history[-3:]
+    avg_scores = []
+    
+    for analysis in recent:
+        scores = analysis.get("scores", {})
+        avg = sum(scores.values()) / len(scores) if scores else 5
+        avg_scores.append(avg)
+    
+    overall_avg = sum(avg_scores) / len(avg_scores)
+    
+    if overall_avg >= 8:
+        return "challenging"  # Провокационные, глубинные
+    elif overall_avg >= 6:
+        return "standard"     # Обычные вопросы
+    else:
+        return "supportive"   # Упрощённые, поддерживающие
+
+
+async def generate_question(...) -> str:
+    """Генерация с адаптивной сложностью."""
+    difficulty = get_question_difficulty(analysis_history)
+    
+    difficulty_instructions = {
+        "challenging": """
+            Задай ПРОВОКАЦИОННЫЙ вопрос:
+            - Намеренно создай дискомфорт
+            - Попроси привести пример ПРОВАЛА
+            - Спроси о противоречиях в предыдущих ответах
+            - Поставь перед сложным выбором
+        """,
+        "standard": """
+            Задай вопрос средней сложности:
+            - Попроси конкретный пример
+            - Углубись в выявленные темы
+        """,
+        "supportive": """
+            Задай ПОДДЕРЖИВАЮЩИЙ вопрос:
+            - Помоги кандидату раскрыться
+            - Спроси о том, что получается хорошо
+            - Избегай давления
+        """,
+    }
+    
+    # Добавляем инструкцию в промпт
+    messages = get_question_prompt(...)
+    messages[0]["content"] += difficulty_instructions[difficulty]
+    
+    return await chat_completion(messages, ...)
+```
+
+### 2.4 Детекция паттернов
+
+```python
+# src/ai/pattern_detector.py
+
+SUSPICIOUS_PATTERNS = {
+    "rehearsed_answers": [
+        r"как я уже говорил",
+        r"обычно в таких случаях",
+        r"по методологии \w+",
+        r"согласно best practices",
+    ],
+    "evasive": [
+        r"сложно сказать",
+        r"это зависит",
+        r"по-разному",
+        r"не помню точно",
+    ],
+    "overconfident": [
+        r"я всегда",
+        r"у меня никогда не было проблем",
+        r"я лучший в",
+        r"все говорят что я",
+    ],
+}
+
+def detect_patterns(answer: str) -> list[str]:
+    """Выявить подозрительные паттерны в ответе."""
+    detected = []
+    
+    for pattern_type, patterns in SUSPICIOUS_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, answer, re.IGNORECASE):
+                detected.append(pattern_type)
+                break
+    
+    return detected
+```
 
 ---
 
-### Product Manager / Product Owner
+## 🎯 ФАЗА 3: Продвинутая аналитика (2-3 недели)
 
-#### Hard Skills (30%)
-- Стратегия продукта
-- Метрики (AARRR, North Star, Unit-экономика)
-- Исследования рынка и конкурентов
-- User Research
-- Приоритизация (RICE, ICE, etc.)
-- Roadmapping
-- A/B тестирование
-- SQL / аналитика
-- Работа с техническим долгом
+### 3.1 Профиль компетенций
 
-#### Soft Skills (25%)
-- Stakeholder management
-- Лидерство без власти
-- Навыки переговоров
-- Фасилитация
-- Управление командой
-- Работа с конфликтами
+```python
+# src/analytics/competency_profile.py
 
-#### Thinking (25%)
-- Стратегическое мышление
-- Системное видение
-- Data-driven решения
-- Баланс интуиции и данных
-- Умение сказать "нет"
-- Работа с неопределённостью
+from dataclasses import dataclass
+from typing import Optional
 
-#### Mindset (20%)
-- Ownership
-- Клиентоцентричность
-- Толерантность к провалам
-- Этика продукта
-- Долгосрочное мышление vs хаки
+@dataclass
+class CompetencyProfile:
+    """Полный профиль компетенций на основе диагностики."""
+    
+    # Базовые данные
+    role: str
+    experience: str
+    total_score: int
+    
+    # Детальные оценки по категориям
+    hard_skills: dict[str, float]  # methodology, tools, domain
+    soft_skills: dict[str, float]  # communication, empathy, conflict
+    thinking: dict[str, float]     # analytical, systems, creative
+    mindset: dict[str, float]      # growth, integrity, reflection
+    
+    # Топ-3 сильные стороны
+    strengths: list[str]
+    
+    # Топ-3 зоны роста
+    growth_areas: list[str]
+    
+    # Психологический профиль
+    thinking_style: str  # analytical / creative / strategic / tactical
+    communication_style: str  # direct / diplomatic / avoiding
+    risk_tolerance: str  # conservative / moderate / aggressive
+    motivation_driver: str  # growth / recognition / stability / impact
+    
+    # Сравнение с бенчмарком
+    percentile: int  # 0-100, позиция среди аналогичных
+    
+    # Рекомендации
+    development_plan: list[str]
+    recommended_resources: list[dict]  # books, courses, etc.
+
+
+def build_profile(session: DiagnosticSession) -> CompetencyProfile:
+    """Построить профиль на основе сессии."""
+    
+    # Извлекаем все оценки из analysis_history
+    all_scores = aggregate_scores(session.analysis_history)
+    
+    # Определяем психологические характеристики
+    thinking_style = detect_thinking_style(session.conversation_history)
+    communication_style = detect_communication_style(session.conversation_history)
+    
+    # Находим сильные стороны и зоны роста
+    sorted_scores = sorted(all_scores.items(), key=lambda x: x[1], reverse=True)
+    strengths = [s[0] for s in sorted_scores[:3]]
+    growth_areas = [s[0] for s in sorted_scores[-3:]]
+    
+    # Генерируем рекомендации
+    development_plan = generate_development_plan(growth_areas, session.role)
+    resources = find_recommended_resources(growth_areas, session.role)
+    
+    return CompetencyProfile(
+        role=session.role,
+        experience=session.experience,
+        total_score=session.total_score,
+        hard_skills=extract_category_scores(all_scores, "hard"),
+        soft_skills=extract_category_scores(all_scores, "soft"),
+        thinking=extract_category_scores(all_scores, "thinking"),
+        mindset=extract_category_scores(all_scores, "mindset"),
+        strengths=strengths,
+        growth_areas=growth_areas,
+        thinking_style=thinking_style,
+        communication_style=communication_style,
+        risk_tolerance=detect_risk_tolerance(session.conversation_history),
+        motivation_driver=detect_motivation(session.conversation_history),
+        percentile=calculate_percentile(session),
+        development_plan=development_plan,
+        recommended_resources=resources,
+    )
+```
+
+### 3.2 Бенчмаркинг
+
+```python
+# src/analytics/benchmark.py
+
+async def calculate_percentile(session: DiagnosticSession) -> int:
+    """
+    Вычислить перцентиль пользователя среди аналогичных.
+    
+    Сравнение по:
+    - Той же роли (designer / product)
+    - Тому же уровню опыта (±1 уровень)
+    """
+    async with get_session() as db:
+        # Находим похожие завершённые сессии
+        similar_sessions = await db.execute(
+            select(DiagnosticSession)
+            .where(
+                DiagnosticSession.role == session.role,
+                DiagnosticSession.status == "completed",
+                DiagnosticSession.total_score.isnot(None),
+            )
+        )
+        
+        all_scores = [s.total_score for s in similar_sessions.scalars()]
+        
+        if len(all_scores) < 10:
+            return 50  # Недостаточно данных
+        
+        # Считаем перцентиль
+        below_count = sum(1 for s in all_scores if s < session.total_score)
+        percentile = int((below_count / len(all_scores)) * 100)
+        
+        return percentile
+
+
+def get_benchmark_insights(session: DiagnosticSession, percentile: int) -> list[str]:
+    """Генерация инсайтов на основе бенчмарка."""
+    insights = []
+    
+    if percentile >= 90:
+        insights.append(f"🏆 Ты в топ-10% {session.role_name}ов с опытом {session.experience_name}")
+    elif percentile >= 75:
+        insights.append(f"💪 Ты опережаешь 75% коллег по профессии")
+    elif percentile >= 50:
+        insights.append(f"📊 Ты в верхней половине специалистов твоего уровня")
+    else:
+        insights.append(f"📈 Есть потенциал для роста — ты можешь подняться выше")
+    
+    return insights
+```
+
+### 3.3 Трекинг прогресса
+
+```python
+# src/analytics/progress.py
+
+@dataclass
+class ProgressReport:
+    """Отчёт о прогрессе между диагностиками."""
+    
+    sessions_count: int
+    first_date: datetime
+    last_date: datetime
+    
+    # Динамика общего скора
+    first_score: int
+    current_score: int
+    score_change: int
+    score_trend: str  # "growing" / "stable" / "declining"
+    
+    # Детальная динамика по категориям
+    category_changes: dict[str, int]  # {"hard_skills": +5, ...}
+    
+    # Улучшившиеся области
+    improved_areas: list[str]
+    
+    # Ухудшившиеся области
+    declined_areas: list[str]
+    
+    # Рекомендация
+    recommendation: str
+
+
+async def get_progress_report(user_id: int) -> Optional[ProgressReport]:
+    """Получить отчёт о прогрессе пользователя."""
+    async with get_session() as db:
+        sessions = await db.execute(
+            select(DiagnosticSession)
+            .where(
+                DiagnosticSession.user_id == user_id,
+                DiagnosticSession.status == "completed",
+            )
+            .order_by(DiagnosticSession.completed_at)
+        )
+        
+        sessions_list = list(sessions.scalars())
+        
+        if len(sessions_list) < 2:
+            return None  # Нужно минимум 2 диагностики
+        
+        first = sessions_list[0]
+        last = sessions_list[-1]
+        
+        score_change = last.total_score - first.total_score
+        
+        if score_change > 5:
+            trend = "growing"
+            recommendation = "Отличная динамика! Продолжай в том же духе."
+        elif score_change < -5:
+            trend = "declining"
+            recommendation = "Заметно снижение. Рекомендую уделить внимание развитию."
+        else:
+            trend = "stable"
+            recommendation = "Стабильный уровень. Попробуй выйти из зоны комфорта."
+        
+        return ProgressReport(
+            sessions_count=len(sessions_list),
+            first_date=first.started_at,
+            last_date=last.completed_at,
+            first_score=first.total_score,
+            current_score=last.total_score,
+            score_change=score_change,
+            score_trend=trend,
+            category_changes=calculate_category_changes(first, last),
+            improved_areas=find_improved_areas(first, last),
+            declined_areas=find_declined_areas(first, last),
+            recommendation=recommendation,
+        )
+```
 
 ---
 
-## 🔬 Алгоритм диагностики
+## 🎯 ФАЗА 4: Интеграции (3-4 недели)
 
-### Фаза 1: Инициализация (до вопросов)
+### 4.1 Webhook для внешних систем
+
+```python
+# src/integrations/webhook.py
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class DiagnosticResult(BaseModel):
+    session_id: int
+    user_telegram_id: int
+    user_name: str
+    role: str
+    experience: str
+    total_score: int
+    scores: dict
+    report_summary: str
+    completed_at: str
+
+
+@app.post("/webhook/{webhook_id}")
+async def send_to_webhook(webhook_id: str, result: DiagnosticResult):
+    """Отправить результат во внешнюю систему."""
+    
+    # Получаем URL webhook из настроек
+    webhook_url = await get_webhook_url(webhook_id)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            webhook_url,
+            json=result.dict(),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(500, f"Webhook failed: {response.text}")
+    
+    return {"status": "sent"}
 ```
-1. Пользователь выбирает роль: Дизайнер / Продакт
-2. Указывает опыт: <1 год / 1-3 года / 3-5 лет / 5+ лет
-3. (Опционально) Компания / продукт
+
+### 4.2 Notion интеграция
+
+```python
+# src/integrations/notion.py
+
+from notion_client import AsyncClient
+
+class NotionExporter:
+    def __init__(self, token: str, database_id: str):
+        self.client = AsyncClient(auth=token)
+        self.database_id = database_id
+    
+    async def export_session(self, session: DiagnosticSession, profile: CompetencyProfile):
+        """Экспортировать результат в Notion базу."""
+        
+        page = await self.client.pages.create(
+            parent={"database_id": self.database_id},
+            properties={
+                "Name": {"title": [{"text": {"content": f"{session.user.first_name} - {session.role_name}"}}]},
+                "Score": {"number": session.total_score},
+                "Role": {"select": {"name": session.role_name}},
+                "Experience": {"select": {"name": session.experience_name}},
+                "Level": {"select": {"name": profile.get_level()}},
+                "Strengths": {"multi_select": [{"name": s} for s in profile.strengths]},
+                "Growth Areas": {"multi_select": [{"name": g} for g in profile.growth_areas]},
+                "Date": {"date": {"start": session.completed_at.isoformat()}},
+                "Telegram": {"url": f"https://t.me/{session.user.username}"},
+            },
+            children=[
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"text": {"content": session.report[:2000]}}]
+                    }
+                }
+            ]
+        )
+        
+        return page["id"]
 ```
 
-### Фаза 2: Адаптивный опрос (10 вопросов)
-
-**Распределение фокуса вопросов:**
-- Вопросы 1-2: Широкий скрининг (выявление сильных/слабых зон)
-- Вопросы 3-4: Углубление в Hard Skills
-- Вопросы 5-6: Проверка Soft Skills
-- Вопросы 7-8: Тест мышления (Thinking)
-- Вопросы 9-10: Проверка Mindset + финальное давление
-
-**После каждого ответа AI анализирует:**
-1. Глубину ответа (поверхностный / средний / глубокий)
-2. Конкретность (общие слова vs реальные примеры)
-3. Самоосознание (понимает ли свои ограничения)
-4. Паттерны мышления (как структурирует мысль)
-5. Эмоциональные маркеры (уверенность, сомнение, защита)
-6. Выявленные пробелы → следующий вопрос копает туда
-
-### Фаза 3: Скоринг
+### 4.3 Telegram Mini App
 
 ```
-Для каждого ответа:
-  - Hard Score: 0-10 (насколько технически грамотен ответ)
-  - Soft Score: 0-10 (как коммуницирует, структурирует)
-  - Thinking Score: 0-10 (глубина рассуждений)
-  - Mindset Score: 0-10 (ценности, зрелость)
+tg-bot/
+├── miniapp/
+│   ├── package.json
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   │   ├── QuestionCard.tsx
+│   │   │   ├── ProgressBar.tsx
+│   │   │   ├── CompetencyRadar.tsx
+│   │   │   └── ReportView.tsx
+│   │   └── hooks/
+│   │       └── useTelegram.ts
+│   └── vite.config.ts
+```
+
+**Преимущества Mini App:**
+- Богатый UI (анимации, графики)
+- Radar chart для компетенций
+- Интерактивный отчёт
+- Sharing результатов
+
+---
+
+## 🎯 ФАЗА 5: DevOps & Масштабирование (2-3 недели)
+
+### 5.1 Docker
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Установка зависимостей системы
+RUN apt-get update && apt-get install -y \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копируем зависимости
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Копируем код
+COPY src/ src/
+COPY *.py .
+
+# Переменные окружения
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "-m", "src.bot.main"]
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - redis
   
-Финальный расчёт с весами → 0-100
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
 ```
 
-### Фаза 4: Генерация отчёта
+### 5.2 Переход на PostgreSQL
 
----
+```python
+# src/core/config.py
 
-## 📋 Структура финального отчёта
+class Settings(BaseSettings):
+    # Database
+    database_url: str = "sqlite+aiosqlite:///diagnostic_bot.db"
+    
+    # Для продакшена:
+    # database_url: str = "postgresql+asyncpg://user:pass@host:5432/dbname"
+    
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+```
 
-```markdown
-# Диагностика: [Имя] — [Роль]
+### 5.3 Redis для кэширования
 
-## 🎯 Общий балл: XX/100
+```python
+# src/cache/redis_cache.py
 
-### Breakdown:
-- Hard Skills: XX/30
-- Soft Skills: XX/25  
-- Thinking: XX/25
-- Mindset: XX/20
+import redis.asyncio as redis
+import json
 
----
-
-## 💪 Сильные стороны
-1. [Конкретный пункт с примером из ответа]
-2. ...
-3. ...
-
-## ⚠️ Зоны роста
-1. [Конкретный пункт с рекомендацией]
-2. ...
-3. ...
-
-## 🔍 Глубинный анализ
-
-### Как специалист:
-[2-3 абзаца с выводами о профессиональном уровне]
-
-### Как человек:
-[2-3 абзаца о личностных качествах, ценностях, паттернах]
-
-### Рекомендации по развитию:
-1. [Конкретный совет]
-2. [Конкретный совет]
-3. [Конкретный совет]
-
----
-
-## 📊 Матрица компетенций
-
-| Компетенция | Уровень | Комментарий |
-|-------------|---------|-------------|
-| [Skill 1]   | ⭐⭐⭐⭐☆ | [Краткий вывод] |
-| [Skill 2]   | ⭐⭐⭐☆☆ | [Краткий вывод] |
-| ...         | ...     | ... |
-
----
-
-## 🎭 Психологический профиль
-
-- **Тип мышления:** Аналитик / Креативщик / Стратег / Исполнитель
-- **Коммуникативный стиль:** Прямой / Дипломатичный / Избегающий
-- **Отношение к риску:** Консервативный / Умеренный / Рисковый
-- **Драйвер мотивации:** Рост / Признание / Стабильность / Влияние
+class CacheManager:
+    def __init__(self, redis_url: str):
+        self.redis = redis.from_url(redis_url)
+    
+    async def cache_analysis(self, session_id: int, question_num: int, analysis: dict):
+        """Кэшировать анализ ответа."""
+        key = f"analysis:{session_id}:{question_num}"
+        await self.redis.setex(key, 3600, json.dumps(analysis))
+    
+    async def get_cached_analysis(self, session_id: int, question_num: int) -> dict | None:
+        """Получить кэшированный анализ."""
+        key = f"analysis:{session_id}:{question_num}"
+        data = await self.redis.get(key)
+        return json.loads(data) if data else None
+    
+    async def cache_question(self, context_hash: str, question: str):
+        """Кэшировать сгенерированный вопрос."""
+        key = f"question:{context_hash}"
+        await self.redis.setex(key, 1800, question)  # 30 минут
 ```
 
 ---
 
-## 🛠 Техническая архитектура
+## 📅 Таймлайн
 
-### Стек технологий
+| Фаза | Длительность | Приоритет | Статус |
+|------|-------------|-----------|--------|
+| 1. Стабилизация | 3-5 дней | 🔴 Критический | Pending |
+| 2. Качество диагностики | 1-2 недели | 🟡 Высокий | Pending |
+| 3. Аналитика | 2-3 недели | 🟢 Средний | Pending |
+| 4. Интеграции | 3-4 недели | 🔵 Низкий | Pending |
+| 5. DevOps | 2-3 недели | 🟣 Низкий | Pending |
 
-```
-Backend:
-- Python 3.11+
-- aiogram 3.x (Telegram Bot API)
-- OpenAI API (GPT-4-turbo) / Claude API — для генерации вопросов и анализа
-- Redis — хранение сессий диалога
-- PostgreSQL — хранение результатов
-- Pydantic — валидация данных
-
-Infrastructure:
-- Docker + Docker Compose
-- Railway / Render / VPS для деплоя
-
-Optional:
-- Langchain / LangGraph — для сложных цепочек промптов
-- Sentry — мониторинг ошибок
-```
-
-### Структура проекта
-
-```
-TG-BOT/
-├── src/
-│   ├── bot/
-│   │   ├── __init__.py
-│   │   ├── main.py           # Entry point
-│   │   ├── handlers/
-│   │   │   ├── start.py      # Команда /start
-│   │   │   ├── diagnostic.py # Логика опроса
-│   │   │   └── results.py    # Показ результатов
-│   │   ├── keyboards/
-│   │   │   └── inline.py     # Клавиатуры
-│   │   └── middlewares/
-│   │       └── session.py    # Middleware для сессий
-│   │
-│   ├── core/
-│   │   ├── config.py         # Настройки
-│   │   ├── prompts/
-│   │   │   ├── system.py     # Системные промпты
-│   │   │   ├── designer.py   # Промпты для дизайнеров
-│   │   │   └── product.py    # Промпты для продактов
-│   │   └── scoring.py        # Логика скоринга
-│   │
-│   ├── ai/
-│   │   ├── client.py         # OpenAI/Claude клиент
-│   │   ├── question_gen.py   # Генерация вопросов
-│   │   ├── answer_analyzer.py # Анализ ответов
-│   │   └── report_gen.py     # Генерация отчёта
-│   │
-│   ├── db/
-│   │   ├── models.py         # SQLAlchemy модели
-│   │   ├── session.py        # Сессия БД
-│   │   └── repositories/     # Репозитории
-│   │
-│   └── utils/
-│       └── helpers.py
-│
-├── tests/
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-├── .env.example
-└── README.md
-```
+**Общий срок**: 8-12 недель
 
 ---
 
-## 🤖 Промпт-инжиниринг
+## 🎯 Quick Wins (можно сделать сегодня)
 
-### Системный промпт (ядро)
-
-```markdown
-Ты — эксперт-диагност с 20-летним опытом найма и оценки специалистов. 
-Твоя задача — за 10 вопросов максимально глубоко понять человека.
-
-ПРАВИЛА:
-1. Каждый вопрос должен быть УНИКАЛЬНЫМ и основан на ВСЕХ предыдущих ответах
-2. Не задавай вопросы "в лоб" — используй косвенные техники
-3. Чередуй типы вопросов (ситуационные, гипотетические, провокационные)
-4. Ищи противоречия в ответах — это точки роста
-5. Выявляй неосознаваемые паттерны через серию связанных вопросов
-6. Избегай социально желательных вопросов (на которые легко дать "правильный" ответ)
-7. Создавай контролируемый дискомфорт для проверки реакции
-8. Фиксируй не только ЧТО говорит, но и КАК (структура, примеры, эмоции)
-
-ТЕКУЩИЙ КОНТЕКСТ:
-- Роль: {role}
-- Опыт: {experience}
-- Номер вопроса: {question_number}/10
-- История диалога: {conversation_history}
-- Текущие гипотезы о кандидате: {hypotheses}
-- Выявленные пробелы: {gaps}
-
-Сгенерируй следующий вопрос и объясни свою логику (для внутреннего использования).
-```
-
-### Промпт анализа ответа
-
-```markdown
-Проанализируй ответ кандидата:
-
-ОТВЕТ: {answer}
-
-ОЦЕНИ ПО КРИТЕРИЯМ (0-10 каждый):
-1. Глубина (поверхностный общаками vs конкретика с примерами)
-2. Самоосознание (понимает свои ограничения)
-3. Структурность (хаос vs чёткая логика)
-4. Честность (социально желательные ответы vs искренность)
-5. Профессионализм (уровень владения темой)
-
-ВЫЯВИ:
-- Ключевые инсайты
-- Противоречия с предыдущими ответами
-- Зоны для дальнейшего исследования
-- Гипотезы о личности
-
-ОБНОВИ ОЦЕНКИ:
-- Hard Skills: +/- X баллов (почему)
-- Soft Skills: +/- X баллов (почему)
-- Thinking: +/- X баллов (почему)
-- Mindset: +/- X баллов (почему)
-```
-
----
-
-## 📱 UX Flow
-
-```
-[Пользователь] → /start
-    ↓
-[Бот] → Приветствие + объяснение формата
-    ↓
-[Бот] → "Кто ты?" [Дизайнер] [Продакт]
-    ↓
-[Бот] → "Твой опыт?" [<1 года] [1-3 года] [3-5 лет] [5+ лет]
-    ↓
-[Бот] → "Готов начать? Отвечай развёрнуто, это важно для точности."
-    ↓
-[Цикл x10]
-    [Бот] → Вопрос N/10
-    [Пользователь] → Развёрнутый ответ (текст или голосовое)
-    [Бот] → "Принято ✓" + переход к следующему
-[/Цикл]
-    ↓
-[Бот] → "Анализирую твои ответы... 🔍" (typing 5-10 сек)
-    ↓
-[Бот] → Детальный отчёт (несколько сообщений)
-    ↓
-[Бот] → "Хочешь получить PDF?" [Да] [Нет]
-```
-
----
-
-## 🔥 Фичи для WOW-эффекта
-
-### 1. Голосовые ответы
-- Поддержка голосовых сообщений через Whisper API
-- Анализ не только текста, но и паузы, уверенность в голосе
-
-### 2. Динамическая сложность
-- Если человек отвечает глубоко → усложняем вопросы
-- Если поверхностно → упрощаем, но фиксируем это в оценке
-
-### 3. Антипаттерны
-- Детектим заготовленные ответы и шаблоны
-- Выявляем попытки "продать себя" без реального опыта
-
-### 4. Сравнение с бенчмарком
-- "Ты в топ-20% по системному мышлению среди продактов с таким опытом"
-
-### 5. Персональный план развития
-- На основе выявленных пробелов — конкретные рекомендации, книги, курсы
-
-### 6. Режим "Собеседование"
-- Имитация реального интервью с давлением
-- Оценка стрессоустойчивости
-
----
-
-## 📅 План реализации
-
-### Фаза 0: Подготовка (1-2 дня) ✅
-- [x] Создать Roadmap.md
-- [x] Инициализировать проект (pip, структура папок)
-- [x] Настроить .env.example и config.py
-- [x] Создать базовый README.md
-
-### Фаза 1: MVP бота (3-4 дня) ✅
-- [x] Настроить aiogram 3 + базовые хендлеры
-- [x] /start, выбор роли, выбор опыта
-- [x] Простой flow: 10 захардкоженных вопросов
-- [x] Хранение сессии в памяти (FSM MemoryStorage)
-- [x] Базовый вывод результата
-
-### Фаза 2: Интеграция AI (3-4 дня) ✅
-- [x] Подключить RouterAI (OpenAI-совместимый API)
-- [x] Реализовать генерацию адаптивных вопросов
-- [x] Реализовать анализ каждого ответа
-- [x] Накопление контекста между вопросами
-- [x] Системные промпты для диагностики
-
-### Фаза 3: Скоринг и отчёт (2-3 дня) ✅
-- [x] Реализовать логику подсчёта баллов
-- [x] Генерация детального отчёта через AI
-- [x] Форматирование для Telegram (HTML)
-- [x] Разбивка длинного отчёта на сообщения
-
-### Фаза 4: Persistence (2-3 дня) ✅
-- [x] Подключить SQLite (легко мигрируем на PostgreSQL)
-- [x] Модели: User, DiagnosticSession, Answer
-- [x] Сохранение всех диалогов и результатов
-- [ ] Redis для кэширования сессий (опционально)
-
-### Фаза 5: Polish (2-3 дня) ✅
-- [x] Обработка edge cases (короткие ответы, ошибки)
-- [x] Голосовые сообщения (Whisper через RouterAI)
-- [x] Команды /history и /help
-- [x] Middleware для логирования и ошибок
-- [x] Генерация PDF-отчёта
-
-### Фаза 6: Деплой (1-2 дня)
-- [ ] Docker + docker-compose
-- [ ] Деплой на Railway/Render/VPS
-- [ ] Настройка логирования и мониторинга
-- [ ] Smoke-тесты в проде
-
-### Фаза 7: Итерации (ongoing)
-- [ ] Сбор фидбэка от реальных пользователей
-- [ ] Улучшение промптов на основе данных
-- [ ] Калибровка скоринга
-- [ ] A/B тесты вопросов
+1. **✅ Исправить JSON parsing** → +30% точности оценок
+2. **✅ Добавить логирование сырых ответов AI** → отладка промптов
+3. **✅ Typing indicator при генерации** → лучший UX
+4. **✅ Retry при ошибках AI** → надёжность
+5. **✅ Ограничение длины ответа** → защита от спама
 
 ---
 
 ## 📊 Метрики успеха
 
-1. **Точность оценки** — корреляция с реальными результатами найма (если есть фидбэк)
-2. **Completion Rate** — % прошедших все 10 вопросов
-3. **Глубина ответов** — среднее кол-во слов/символов
-4. **NPS** — "Насколько полезным был отчёт?"
-5. **Repeat Rate** — сколько людей проходят повторно
+| Метрика | Текущее | Цель | Как измерять |
+|---------|---------|------|--------------|
+| JSON Parse Success | ~30% | 100% | Логи ошибок |
+| Avg Response Time | 25-35 сек | <15 сек | Timing middleware |
+| Completion Rate | ? | >80% | БД: started vs completed |
+| User Satisfaction | ? | NPS >50 | Опрос после отчёта |
+| Repeat Usage | ? | >20% | БД: users с >1 session |
 
 ---
 
-## ⚠️ Риски и митигация
+## 🔗 Связанные документы
 
-| Риск | Митигация |
-|------|-----------|
-| AI галлюцинирует факты | Строгие промпты + валидация выводов |
-| Слишком длинные ответы пользователя | Лимит символов + предупреждение |
-| Пользователь отвечает односложно | Просьба расширить + адаптация вопросов |
-| Rate limits OpenAI | Retry logic + fallback на другую модель |
-| Высокая стоимость API | Кэширование + оптимизация промптов |
-
----
-
-## 💡 Идеи на будущее
-
-1. **Командная диагностика** — оценка всей команды и совместимости
-2. **Трекинг прогресса** — проходить раз в 3 месяца, видеть рост
-3. **Белая метка** — для HR-агентств и компаний
-4. **Интеграция с ATS** — автоматическая подгрузка кандидатов
-5. **Видео-интервью** — анализ мимики и невербалики
-6. **Бенчмарк по компаниям** — "Ты на уровне мидла в Яндексе"
-
----
-
-## 🚀 Начинаем!
-
-Следующий шаг: Инициализировать проект и создать базовую структуру.
-
+- `Roadmap.md` — оригинальная концепция
+- `README.md` — документация проекта
+- `requirements.txt` — зависимости

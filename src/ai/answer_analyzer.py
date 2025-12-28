@@ -115,15 +115,29 @@ def robust_json_parse(text: str) -> dict:
     raise ValueError(f"No valid JSON found in response: {text[:200]}...")
 
 
+# Все 12 метрик
+ALL_METRICS = [
+    # Hard Skills
+    "expertise",
+    "methodology", 
+    "tools_proficiency",
+    # Soft Skills
+    "articulation",
+    "self_awareness",
+    "conflict_handling",
+    # Thinking
+    "depth",
+    "structure",
+    "systems_thinking",
+    "creativity",
+    # Mindset
+    "honesty",
+    "growth_orientation",
+]
+
 # Дефолтный анализ на случай ошибки
 DEFAULT_ANALYSIS = {
-    "scores": {
-        "depth": 5,
-        "self_awareness": 5,
-        "structure": 5,
-        "honesty": 5,
-        "expertise": 5,
-    },
+    "scores": {metric: 5 for metric in ALL_METRICS},
     "key_insights": ["Анализ недоступен"],
     "gaps": [],
     "hypothesis": "Требуется дополнительный анализ",
@@ -160,19 +174,18 @@ async def analyze_answer(question: str, answer: str, role: str) -> dict:
         if "scores" not in analysis:
             raise ValueError("Missing 'scores' in analysis")
         
-        # Валидация и нормализация значений (0-10)
-        required_scores = ["depth", "self_awareness", "structure", "honesty", "expertise"]
-        for key in required_scores:
-            if key not in analysis["scores"]:
-                analysis["scores"][key] = 5  # Дефолт если отсутствует
+        # Валидация и нормализация значений (0-10) для всех 12 метрик
+        for metric in ALL_METRICS:
+            if metric not in analysis["scores"]:
+                analysis["scores"][metric] = 5  # Дефолт если отсутствует
             else:
-                value = analysis["scores"][key]
+                value = analysis["scores"][metric]
                 # Проверяем тип и диапазон
                 if not isinstance(value, (int, float)):
-                    analysis["scores"][key] = 5
+                    analysis["scores"][metric] = 5
                 else:
                     # Ограничиваем диапазон 0-10
-                    analysis["scores"][key] = max(0, min(10, value))
+                    analysis["scores"][metric] = max(0, min(10, value))
         
         # Проверяем наличие других полей
         if "key_insights" not in analysis:
@@ -204,6 +217,12 @@ def calculate_category_scores(analyses: list[dict]) -> dict:
     """
     Рассчитать итоговые баллы по категориям на основе всех анализов.
     
+    12 метрик → 4 категории:
+    - Hard Skills (30): expertise, methodology, tools_proficiency
+    - Soft Skills (25): articulation, self_awareness, conflict_handling
+    - Thinking (25): depth, structure, systems_thinking, creativity
+    - Mindset (20): honesty, growth_orientation
+    
     Args:
         analyses: Список анализов всех ответов
         
@@ -219,37 +238,35 @@ def calculate_category_scores(analyses: list[dict]) -> dict:
             "total": 0,
         }
     
-    # Собираем все оценки
-    all_scores = {
-        "depth": [],
-        "self_awareness": [],
-        "structure": [],
-        "honesty": [],
-        "expertise": [],
-    }
+    # Собираем все оценки по 12 метрикам
+    all_scores = {metric: [] for metric in ALL_METRICS}
     
     for analysis in analyses:
         scores = analysis.get("scores", {})
-        for key in all_scores:
-            if key in scores:
-                all_scores[key].append(scores[key])
+        for metric in ALL_METRICS:
+            if metric in scores:
+                all_scores[metric].append(scores[metric])
     
-    # Средние значения
+    # Средние значения для каждой метрики
     avg = {k: sum(v) / len(v) if v else 5 for k, v in all_scores.items()}
     
-    # Маппинг на категории (0-30, 0-25, 0-25, 0-20)
-    # Hard Skills = expertise (30 баллов макс)
-    hard_skills = round(avg["expertise"] * 3)  # 0-10 -> 0-30
+    # === МАППИНГ НА КАТЕГОРИИ ===
     
-    # Soft Skills = (self_awareness + honesty) / 2 (25 баллов макс)
-    soft_skills = round((avg["self_awareness"] + avg["honesty"]) / 2 * 2.5)  # 0-10 -> 0-25
+    # Hard Skills (30 баллов) = среднее из 3 метрик × 3
+    hard_skills_avg = (avg["expertise"] + avg["methodology"] + avg["tools_proficiency"]) / 3
+    hard_skills = round(hard_skills_avg * 3)  # 0-10 -> 0-30
     
-    # Thinking = (structure + depth) / 2 (25 баллов макс)
-    thinking = round((avg["structure"] + avg["depth"]) / 2 * 2.5)  # 0-10 -> 0-25
+    # Soft Skills (25 баллов) = среднее из 3 метрик × 2.5
+    soft_skills_avg = (avg["articulation"] + avg["self_awareness"] + avg["conflict_handling"]) / 3
+    soft_skills = round(soft_skills_avg * 2.5)  # 0-10 -> 0-25
     
-    # Mindset = (self_awareness + honesty) / 2 (20 баллов макс)
-    # Немного другой расчёт для разнообразия
-    mindset = round((avg["self_awareness"] * 0.6 + avg["honesty"] * 0.4) * 2)  # 0-10 -> 0-20
+    # Thinking (25 баллов) = среднее из 4 метрик × 2.5
+    thinking_avg = (avg["depth"] + avg["structure"] + avg["systems_thinking"] + avg["creativity"]) / 4
+    thinking = round(thinking_avg * 2.5)  # 0-10 -> 0-25
+    
+    # Mindset (20 баллов) = среднее из 2 метрик × 2
+    mindset_avg = (avg["honesty"] + avg["growth_orientation"]) / 2
+    mindset = round(mindset_avg * 2)  # 0-10 -> 0-20
     
     total = hard_skills + soft_skills + thinking + mindset
     
@@ -259,6 +276,6 @@ def calculate_category_scores(analyses: list[dict]) -> dict:
         "thinking": min(thinking, 25),
         "mindset": min(mindset, 20),
         "total": min(total, 100),
-        "raw_averages": avg,  # Для отладки
+        "raw_averages": avg,  # Все 12 метрик для детального отчёта
     }
 
