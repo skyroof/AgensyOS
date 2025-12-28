@@ -67,3 +67,43 @@ def get_confirm_answer_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="✏️ Изменить", callback_data="edit_answer"),
     )
     return builder.as_markup()
+
+
+def get_onboarding_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура онбординга."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Понятно, начинаем!", callback_data="onboarding_done"),
+    )
+    return builder.as_markup()
+
+
+def get_feedback_rating_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура с кнопками 1-10 для оценки."""
+    builder = InlineKeyboardBuilder()
+    # Первый ряд: 1-5
+    builder.row(
+        InlineKeyboardButton(text="1", callback_data="feedback:1"),
+        InlineKeyboardButton(text="2", callback_data="feedback:2"),
+        InlineKeyboardButton(text="3", callback_data="feedback:3"),
+        InlineKeyboardButton(text="4", callback_data="feedback:4"),
+        InlineKeyboardButton(text="5", callback_data="feedback:5"),
+    )
+    # Второй ряд: 6-10
+    builder.row(
+        InlineKeyboardButton(text="6", callback_data="feedback:6"),
+        InlineKeyboardButton(text="7", callback_data="feedback:7"),
+        InlineKeyboardButton(text="8", callback_data="feedback:8"),
+        InlineKeyboardButton(text="9", callback_data="feedback:9"),
+        InlineKeyboardButton(text="🔟", callback_data="feedback:10"),
+    )
+    return builder.as_markup()
+
+
+def get_skip_comment_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для пропуска комментария."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_feedback_comment"),
+    )
+    return builder.as_markup()

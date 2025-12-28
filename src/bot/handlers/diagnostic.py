@@ -9,7 +9,13 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from src.bot.states import DiagnosticStates
-from src.bot.keyboards.inline import get_restart_keyboard, get_report_keyboard, get_confirm_answer_keyboard
+from src.bot.keyboards.inline import (
+    get_restart_keyboard, 
+    get_report_keyboard, 
+    get_confirm_answer_keyboard,
+    get_feedback_rating_keyboard,
+    get_skip_comment_keyboard,
+)
 from src.ai.question_gen import generate_question
 from src.ai.answer_analyzer import (
     analyze_answer, 
@@ -18,19 +24,54 @@ from src.ai.answer_analyzer import (
     METRIC_NAMES_RU,
     METRIC_CATEGORIES,
 )
-from src.ai.report_gen import generate_detailed_report, split_message
+from src.ai.report_gen import generate_detailed_report, split_message, split_report_into_blocks, sanitize_html
 from src.ai.client import AIServiceError
 from src.db import get_session
-from src.db.repositories import save_answer, update_session_progress, complete_session
+from src.db.repositories import save_answer, update_session_progress, complete_session, save_feedback
 
 router = Router(name="diagnostic")
 logger = logging.getLogger(__name__)
 
 TOTAL_QUESTIONS = 10
+REMINDER_TIMEOUT = 5 * 60  # 5 минут
+
+# Хранилище таймеров напоминаний {chat_id: asyncio.Task}
+_reminder_tasks: dict[int, asyncio.Task] = {}
+
+
+async def _send_reminder(bot: Bot, chat_id: int, question_num: int):
+    """Отправляет напоминание через REMINDER_TIMEOUT секунд."""
+    try:
+        await asyncio.sleep(REMINDER_TIMEOUT)
+        await bot.send_message(
+            chat_id,
+            f"⏰ <b>Напоминание</b>\n\n"
+            f"Ты на вопросе {question_num}/{TOTAL_QUESTIONS}.\n"
+            f"Можешь продолжить, когда будешь готов!\n\n"
+            f"<i>Если нужно время подумать — это нормально 😊</i>",
+        )
+    except asyncio.CancelledError:
+        pass  # Таймер отменён — пользователь ответил
+    except Exception as e:
+        logger.debug(f"Reminder failed: {e}")
+
+
+def start_reminder(bot: Bot, chat_id: int, question_num: int):
+    """Запускает таймер напоминания."""
+    cancel_reminder(chat_id)
+    task = asyncio.create_task(_send_reminder(bot, chat_id, question_num))
+    _reminder_tasks[chat_id] = task
+
+
+def cancel_reminder(chat_id: int):
+    """Отменяет таймер напоминания."""
+    if chat_id in _reminder_tasks:
+        _reminder_tasks[chat_id].cancel()
+        del _reminder_tasks[chat_id]
 
 
 @router.callback_query(F.data == "start_diagnostic", DiagnosticStates.ready_to_start)
-async def start_diagnostic(callback: CallbackQuery, state: FSMContext):
+async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Начало диагностики — первый вопрос."""
     data = await state.get_data()
     
@@ -60,6 +101,9 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(DiagnosticStates.answering)
     await callback.answer()
+    
+    # Запускаем таймер напоминания
+    start_reminder(bot, callback.message.chat.id, 1)
 
 
 MIN_ANSWER_LENGTH = 20  # Минимальная длина ответа
@@ -68,18 +112,85 @@ MIN_ANSWER_LENGTH = 20  # Минимальная длина ответа
 @router.message(DiagnosticStates.answering)
 async def capture_answer(message: Message, state: FSMContext):
     """Захват ответа и показ preview для подтверждения."""
-    # Проверяем, что это текстовое сообщение
+    # Отменяем таймер напоминания
+    cancel_reminder(message.chat.id)
+    
+    # Проверяем тип контента и даём подсказку
+    if message.photo:
+        await message.answer(
+            "🖼️ Вижу картинку!\n\n"
+            "Пока я не умею анализировать изображения.\n"
+            "<b>Опиши словами то, что хотел показать</b> — "
+            "например, расскажи о проекте с этого скриншота."
+        )
+        return
+    
+    if message.sticker:
+        await message.answer(
+            "😊 Классный стикер!\n\n"
+            "Но для диагностики мне нужен текстовый ответ.\n"
+            "<b>Расскажи развёрнуто</b> — это поможет точнее оценить твой уровень."
+        )
+        return
+    
+    if message.document:
+        await message.answer(
+            "📎 Вижу документ!\n\n"
+            "Пока я не умею читать файлы.\n"
+            "<b>Опиши ключевые моменты текстом</b> — "
+            "что за проект, какие задачи решал, какой результат?"
+        )
+        return
+    
+    if message.video or message.video_note:
+        await message.answer(
+            "🎥 Вижу видео!\n\n"
+            "Пока я не умею анализировать видео.\n"
+            "<b>Расскажи текстом или голосом</b> — это тоже работает!"
+        )
+        return
+    
+    if message.animation:  # GIF
+        await message.answer(
+            "🎬 Крутая гифка!\n\n"
+            "Но для диагностики нужен текстовый ответ.\n"
+            "<b>Опиши свою мысль словами</b> 😊"
+        )
+        return
+    
+    if message.contact or message.location:
+        await message.answer(
+            "📍 Это интересно, но для диагностики нужен текстовый ответ.\n\n"
+            "<b>Расскажи о своём опыте словами</b> — чем подробнее, тем лучше!"
+        )
+        return
+    
     if not message.text:
         await message.answer(
-            "📝 Пожалуйста, отправь текстовый ответ.\n\n"
+            "📝 Для диагностики нужен текстовый ответ.\n\n"
             "<i>Голосовые сообщения тоже поддерживаются!</i>"
         )
         return
     
-    # Проверяем длину ответа
-    if len(message.text.strip()) < MIN_ANSWER_LENGTH:
+    # Проверяем, не отправлена ли только ссылка
+    import re
+    text_stripped = message.text.strip()
+    url_pattern = r'^https?://\S+$'
+    if re.match(url_pattern, text_stripped):
         await message.answer(
-            f"✏️ Ответ слишком короткий ({len(message.text)} символов).\n\n"
+            "🔗 Вижу ссылку!\n\n"
+            "Я пока не умею открывать страницы.\n"
+            "<b>Расскажи о проекте своими словами:</b>\n"
+            "• Что это за проект?\n"
+            "• Какую задачу решал?\n"
+            "• Какой был результат?"
+        )
+        return
+    
+    # Проверяем длину ответа
+    if len(text_stripped) < MIN_ANSWER_LENGTH:
+        await message.answer(
+            f"✏️ Ответ слишком короткий ({len(text_stripped)} символов).\n\n"
             "Для точной диагностики нужны развёрнутые ответы.\n"
             "Расскажи подробнее — хотя бы 2-3 предложения."
         )
@@ -335,8 +446,12 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             f"<b>Вопрос {next_question_num}/{TOTAL_QUESTIONS}</b>\n\n{next_question}",
         )
         await state.set_state(DiagnosticStates.answering)
+        
+        # Запускаем таймер напоминания для следующего вопроса
+        start_reminder(bot, callback.message.chat.id, next_question_num)
     else:
         # Все вопросы заданы — генерируем детальный отчёт
+        cancel_reminder(callback.message.chat.id)  # Отменяем таймер
         from aiogram.enums import ChatAction
         
         await state.update_data(
@@ -418,29 +533,68 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             except Exception as e:
                 logger.error(f"Failed to complete session: {e}")
         
-        # Отправляем отчёт (возможно несколькими сообщениями)
-        parts = split_message(full_report)
-        
         # Выбираем клавиатуру (с PDF если есть session_id)
         if db_session_id:
             keyboard = get_report_keyboard(db_session_id)
         else:
             keyboard = get_restart_keyboard()
         
-        # Первую часть редактируем в существующее сообщение
-        await thinking_msg.edit_text(parts[0])
+        # === ОТПРАВКА ОТЧЁТА БЛОКАМИ С ПАУЗАМИ ===
         
-        # Остальные части отправляем новыми сообщениями
-        for i, part in enumerate(parts[1:], 1):
-            # Последняя часть — с кнопкой
-            if i == len(parts) - 1:
-                await callback.message.answer(part, reply_markup=keyboard)
-            else:
-                await callback.message.answer(part)
+        # 1️⃣ Шапка с баллами (редактируем thinking_msg)
+        await thinking_msg.edit_text(header)
         
-        # Если была только одна часть — добавляем кнопку отдельным сообщением
-        if len(parts) == 1:
-            await callback.message.answer("👆 Твой отчёт выше", reply_markup=keyboard)
+        # 2️⃣ Разбиваем AI-отчёт на блоки
+        report_blocks = split_report_into_blocks(report)
+        
+        # Если блоков мало — fallback на простую отправку
+        if len(report_blocks) <= 1:
+            await asyncio.sleep(1)
+            try:
+                await callback.message.answer(sanitize_html(report))
+            except Exception as e:
+                logger.warning(f"Report HTML error: {e}")
+                await callback.message.answer(report, parse_mode=None)
+        else:
+            # Отправляем блоки с паузами
+            for i, block in enumerate(report_blocks):
+                await asyncio.sleep(1)  # Пауза между блоками
+                await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
+                
+                # Форматируем блок и санитизируем HTML
+                block_text = f"{block['emoji']} <b>{block['title']}</b>\n\n{block['content']}"
+                block_text = sanitize_html(block_text)
+                
+                # Разбиваем если слишком длинный
+                block_parts = split_message(block_text, max_length=3500)
+                for part in block_parts:
+                    try:
+                        await callback.message.answer(part)
+                    except Exception as e:
+                        # Если HTML всё ещё сломан — отправляем plain text
+                        logger.warning(f"HTML parse error, sending as plain: {e}")
+                        plain_text = part.replace('<b>', '').replace('</b>', '')
+                        plain_text = plain_text.replace('<i>', '').replace('</i>', '')
+                        await callback.message.answer(plain_text, parse_mode=None)
+        
+        await asyncio.sleep(0.5)
+        
+        # 3️⃣ Показываем кнопки PDF/рестарт
+        await callback.message.answer(
+            "✅ <b>Диагностика завершена!</b>\n\n"
+            "Сохрани результаты или пройди ещё раз:",
+            reply_markup=keyboard,
+        )
+        
+        # 4️⃣ Запрашиваем feedback
+        await asyncio.sleep(1)
+        await callback.message.answer(
+            "📊 <b>Оцени качество диагностики</b>\n\n"
+            "Насколько полезным был этот опыт?\n"
+            "Выбери от 1 (плохо) до 10 (отлично):",
+            reply_markup=get_feedback_rating_keyboard(),
+        )
+        await state.set_state(DiagnosticStates.feedback_rating)
 
 
 def generate_score_header(data: dict, scores: dict) -> str:
@@ -552,3 +706,96 @@ async def generate_basic_report(
 {final_hypothesis}
 
 <i>Детальный AI-анализ временно недоступен.</i>"""
+
+
+# ==================== FEEDBACK HANDLERS ====================
+
+@router.callback_query(F.data.startswith("feedback:"), DiagnosticStates.feedback_rating)
+async def process_feedback_rating(callback: CallbackQuery, state: FSMContext):
+    """Обработка оценки от пользователя."""
+    rating = int(callback.data.split(":")[1])
+    
+    await state.update_data(feedback_rating=rating)
+    
+    # Определяем эмодзи по оценке
+    if rating >= 9:
+        emoji = "🎉"
+        reaction = "Супер!"
+    elif rating >= 7:
+        emoji = "😊"
+        reaction = "Отлично!"
+    elif rating >= 5:
+        emoji = "👍"
+        reaction = "Спасибо!"
+    else:
+        emoji = "🙏"
+        reaction = "Спасибо за честность!"
+    
+    await callback.message.edit_text(
+        f"{emoji} <b>{reaction}</b> Ты поставил <b>{rating}/10</b>\n\n"
+        f"Хочешь оставить комментарий?\n"
+        f"<i>Что понравилось или что улучшить?</i>",
+        reply_markup=get_skip_comment_keyboard(),
+    )
+    await state.set_state(DiagnosticStates.feedback_comment)
+    await callback.answer()
+
+
+@router.message(DiagnosticStates.feedback_comment)
+async def process_feedback_comment(message: Message, state: FSMContext):
+    """Обработка текстового комментария к feedback."""
+    data = await state.get_data()
+    rating = data.get("feedback_rating", 5)
+    comment = message.text.strip() if message.text else None
+    db_session_id = data.get("db_session_id")
+    
+    # Сохраняем в БД
+    if db_session_id:
+        try:
+            async with get_session() as db:
+                await save_feedback(
+                    session=db,
+                    session_id=db_session_id,
+                    rating=rating,
+                    comment=comment,
+                )
+            logger.info(f"Feedback saved: session={db_session_id} rating={rating}")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+    
+    await message.answer(
+        "✅ <b>Спасибо за обратную связь!</b>\n\n"
+        "Твой отзыв поможет улучшить диагностику 💪\n\n"
+        "Хочешь пройти ещё раз? Нажми /start",
+    )
+    await state.set_state(DiagnosticStates.finished)
+
+
+@router.callback_query(F.data == "skip_feedback_comment", DiagnosticStates.feedback_comment)
+async def skip_feedback_comment(callback: CallbackQuery, state: FSMContext):
+    """Пропуск комментария к feedback."""
+    data = await state.get_data()
+    rating = data.get("feedback_rating", 5)
+    db_session_id = data.get("db_session_id")
+    
+    # Сохраняем в БД (без комментария)
+    if db_session_id:
+        try:
+            async with get_session() as db:
+                await save_feedback(
+                    session=db,
+                    session_id=db_session_id,
+                    rating=rating,
+                    comment=None,
+                )
+            logger.info(f"Feedback saved: session={db_session_id} rating={rating}")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+    
+    await callback.message.edit_text(
+        "✅ <b>Спасибо за оценку!</b>\n\n"
+        "Твой отзыв поможет улучшить диагностику 💪\n\n"
+        "Хочешь пройти ещё раз? Нажми /start",
+    )
+    await state.set_state(DiagnosticStates.finished)
+    await callback.answer()

@@ -9,6 +9,8 @@ from src.db.repositories.diagnostic_repo import (
     save_answer,
     get_user_sessions,
     get_session_with_answers,
+    save_feedback,
+    get_average_rating,
 )
 
 __all__ = [
@@ -22,5 +24,7 @@ __all__ = [
     "save_answer",
     "get_user_sessions",
     "get_session_with_answers",
+    "save_feedback",
+    "get_average_rating",
 ]
 

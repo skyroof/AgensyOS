@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.db.models import DiagnosticSession, Answer, User
+from src.db.models import DiagnosticSession, Answer, User, Feedback
 
 
 async def create_session(
@@ -167,4 +167,30 @@ async def get_session_with_answers(
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def save_feedback(
+    session: AsyncSession,
+    session_id: int,
+    rating: int,
+    comment: str | None = None,
+) -> Feedback:
+    """Сохранить feedback от пользователя."""
+    feedback = Feedback(
+        session_id=session_id,
+        rating=rating,
+        comment=comment,
+    )
+    session.add(feedback)
+    await session.commit()
+    await session.refresh(feedback)
+    return feedback
+
+
+async def get_average_rating(session: AsyncSession) -> float | None:
+    """Получить средний рейтинг по всем feedback."""
+    from sqlalchemy import func
+    stmt = select(func.avg(Feedback.rating))
+    result = await session.execute(stmt)
+    return result.scalar()
 

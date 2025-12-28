@@ -178,6 +178,62 @@ def generate_fallback_report(
 <i>Детальный AI-анализ временно недоступен.</i>"""
 
 
+def sanitize_html(text: str) -> str:
+    """
+    Очистить и исправить HTML для Telegram.
+    
+    Telegram поддерживает только: <b>, <i>, <u>, <s>, <code>, <pre>, <a>
+    """
+    import re
+    
+    # Убираем markdown если AI случайно вставил
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)  # **bold** -> <b>bold</b>
+    text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)  # *italic* -> <i>italic</i>
+    
+    # Убираем незакрытые/сломанные теги
+    allowed_tags = ['b', 'i', 'u', 's', 'code', 'pre', 'a']
+    
+    # Находим все теги
+    tag_pattern = r'<(/?)(\w+)([^>]*)>'
+    
+    def fix_tag(match):
+        closing = match.group(1)
+        tag_name = match.group(2).lower()
+        attrs = match.group(3)
+        
+        if tag_name in allowed_tags:
+            return f'<{closing}{tag_name}{attrs}>'
+        else:
+            return ''  # Убираем неподдерживаемые теги
+    
+    text = re.sub(tag_pattern, fix_tag, text)
+    
+    # Проверяем баланс тегов и закрываем незакрытые
+    for tag in allowed_tags:
+        open_count = len(re.findall(f'<{tag}[^>]*>', text))
+        close_count = len(re.findall(f'</{tag}>', text))
+        
+        # Добавляем недостающие закрывающие теги
+        while close_count < open_count:
+            text += f'</{tag}>'
+            close_count += 1
+        
+        # Убираем лишние закрывающие теги
+        while close_count > open_count:
+            text = re.sub(f'</{tag}>', '', text, count=1)
+            close_count -= 1
+    
+    # Убираем потенциально опасные символы
+    text = text.replace('&', '&amp;').replace('</', '</').replace('<', '<')
+    
+    # Восстанавливаем теги после экранирования
+    for tag in allowed_tags:
+        text = text.replace(f'&lt;{tag}', f'<{tag}')
+        text = text.replace(f'&lt;/{tag}', f'</{tag}')
+    
+    return text
+
+
 def split_message(text: str, max_length: int = 4000) -> list[str]:
     """
     Разбить длинное сообщение на части для Telegram.
@@ -234,3 +290,101 @@ def split_message(text: str, max_length: int = 4000) -> list[str]:
     
     return parts
 
+
+def split_report_into_blocks(report: str) -> list[dict]:
+    """
+    Разбить отчёт на логические блоки для последовательной отправки.
+    
+    Returns:
+        Список блоков: [{"title": "...", "content": "...", "emoji": "..."}]
+    """
+    import re
+    
+    blocks = []
+    
+    # Паттерны для секций (числа с точкой или жирный заголовок)
+    section_patterns = [
+        (r'1\.\s*\*?\*?ОБЩЕЕ ВПЕЧАТЛЕНИЕ\*?\*?', '📌', 'Общее впечатление'),
+        (r'2\.\s*\*?\*?СИЛЬНЫЕ СТОРОНЫ\*?\*?', '💪', 'Сильные стороны'),
+        (r'3\.\s*\*?\*?ЗОНЫ РАЗВИТИЯ\*?\*?', '📈', 'Зоны развития'),
+        (r'4\.\s*\*?\*?HARD SKILLS\*?\*?', '🛠️', 'Hard Skills'),
+        (r'5\.\s*\*?\*?SOFT SKILLS\*?\*?', '🤝', 'Soft Skills'),
+        (r'6\.\s*\*?\*?МЫШЛЕНИЕ\*?\*?', '🧠', 'Мышление'),
+        (r'7\.\s*\*?\*?MINDSET\*?\*?', '🎯', 'Mindset'),
+        (r'8\.\s*\*?\*?РЕКОМЕНДАЦИИ\*?\*?', '📝', 'Рекомендации'),
+        (r'9\.\s*\*?\*?ИТОГОВЫЙ ВЕРДИКТ\*?\*?', '🏆', 'Итоговый вердикт'),
+    ]
+    
+    # Находим все секции
+    text = report
+    found_sections = []
+    
+    for pattern, emoji, title in section_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            found_sections.append((match.start(), emoji, title, pattern))
+    
+    # Сортируем по позиции
+    found_sections.sort(key=lambda x: x[0])
+    
+    # Если не нашли структуру — возвращаем как один блок
+    if len(found_sections) < 3:
+        return [{"emoji": "📊", "title": "Результаты диагностики", "content": report}]
+    
+    # Извлекаем контент каждой секции
+    for i, (pos, emoji, title, pattern) in enumerate(found_sections):
+        # Определяем конец секции (начало следующей или конец текста)
+        if i + 1 < len(found_sections):
+            end_pos = found_sections[i + 1][0]
+        else:
+            end_pos = len(text)
+        
+        # Извлекаем контент
+        content = text[pos:end_pos].strip()
+        
+        # Убираем заголовок из контента (он уже в title)
+        content = re.sub(pattern, '', content, flags=re.IGNORECASE).strip()
+        content = re.sub(r'^[\s\*\:]+', '', content).strip()  # Убираем начальные символы
+        
+        if content:
+            blocks.append({
+                "emoji": emoji,
+                "title": title,
+                "content": content,
+            })
+    
+    # Группируем маленькие блоки (Hard/Soft/Thinking/Mindset)
+    grouped_blocks = []
+    skills_buffer = []
+    
+    for block in blocks:
+        if block["title"] in ["Hard Skills", "Soft Skills", "Мышление", "Mindset"]:
+            skills_buffer.append(block)
+        else:
+            # Если накопились skills — объединяем
+            if skills_buffer:
+                combined_content = "\n\n".join(
+                    f"<b>{b['emoji']} {b['title']}:</b>\n{b['content']}" 
+                    for b in skills_buffer
+                )
+                grouped_blocks.append({
+                    "emoji": "📊",
+                    "title": "Детальная оценка",
+                    "content": combined_content,
+                })
+                skills_buffer = []
+            grouped_blocks.append(block)
+    
+    # Добавляем оставшиеся skills
+    if skills_buffer:
+        combined_content = "\n\n".join(
+            f"<b>{b['emoji']} {b['title']}:</b>\n{b['content']}" 
+            for b in skills_buffer
+        )
+        grouped_blocks.append({
+            "emoji": "📊",
+            "title": "Детальная оценка",
+            "content": combined_content,
+        })
+    
+    return grouped_blocks if grouped_blocks else blocks

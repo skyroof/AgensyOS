@@ -12,6 +12,7 @@ from src.bot.keyboards.inline import (
     get_role_keyboard,
     get_experience_keyboard,
     get_start_diagnostic_keyboard,
+    get_onboarding_keyboard,
 )
 from src.db import get_session
 from src.db.repositories import get_or_create_user, create_session as create_db_session
@@ -82,6 +83,45 @@ async def process_role(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+ONBOARDING_TEXT = """
+📋 <b>Как проходит диагностика</b>
+
+✅ Роль: <b>{role_name}</b>
+✅ Опыт: <b>{exp_value}</b>
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>📝 Важные правила:</b>
+
+1️⃣ <b>Честность важнее "правильности"</b>
+   Нет плохих ответов — есть неточная диагностика из-за приукрашивания.
+
+2️⃣ <b>Текст или голос</b>
+   Пиши текстом или отправляй голосовые. Стикеры и картинки не анализируются.
+
+3️⃣ <b>Развёрнуто = точнее</b>
+   На каждый вопрос достаточно 2-5 минут. Чем больше деталей — тем точнее результат.
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>💡 Пример хорошего ответа:</b>
+
+<i>Вопрос: "Расскажи о сложном проекте"</i>
+
+❌ Плохо: "Делал редизайн, было сложно, справился."
+
+✅ Хорошо: "Редизайн B2B-портала для финтеха. 50k пользователей. 
+Главная сложность — 4 разных UI за 5 лет. Провёл 12 интервью, 
+нашёл топ-5 проблем. Создал дизайн-систему. Результат: 
+время разработки -30%, NPS +15. Ошибка — недооценил 
+сопротивление команды, пришлось переделывать документацию."
+
+<b>Формула:</b> Контекст → Действия → Результат → Выводы
+
+━━━━━━━━━━━━━━━━━━━━
+"""
+
+
 @router.callback_query(F.data.startswith("exp:"), DiagnosticStates.choosing_experience)
 async def process_experience(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора опыта."""
@@ -117,11 +157,30 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"Failed to create session: {e}")
     
+    # Показываем онбординг с правилами
+    onboarding = ONBOARDING_TEXT.format(
+        role_name=data['role_name'],
+        exp_value=exp_value,
+    )
+    
     await callback.message.edit_text(
-        f"✅ Роль: <b>{data['role_name']}</b>\n"
-        f"✅ Опыт: <b>{exp_value}</b>\n\n"
-        "Готов начать? Я задам тебе 10 вопросов.\n"
-        "Отвечай текстом — чем подробнее, тем лучше.",
+        onboarding,
+        reply_markup=get_onboarding_keyboard(),
+    )
+    await state.set_state(DiagnosticStates.onboarding)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "onboarding_done", DiagnosticStates.onboarding)
+async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
+    """Пользователь прочитал онбординг — готов начать."""
+    data = await state.get_data()
+    
+    await callback.message.edit_text(
+        f"🚀 <b>Отлично!</b>\n\n"
+        f"Роль: {data['role_name']}\n"
+        f"Опыт: {data['experience_name']}\n\n"
+        f"Впереди 10 вопросов. Погнали!",
         reply_markup=get_start_diagnostic_keyboard(),
     )
     await state.set_state(DiagnosticStates.ready_to_start)

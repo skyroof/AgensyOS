@@ -105,3 +105,25 @@ class Answer(Base):
     def __repr__(self) -> str:
         return f"<Answer {self.id} session={self.session_id} q={self.question_number}>"
 
+
+class Feedback(Base):
+    """Обратная связь от пользователя о качестве диагностики."""
+    
+    __tablename__ = "feedbacks"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("diagnostic_sessions.id"), unique=True, index=True)
+    
+    # Оценка от 1 до 10
+    rating: Mapped[int] = mapped_column(Integer)
+    
+    # Опциональный комментарий
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Связь
+    session: Mapped["DiagnosticSession"] = relationship()
+    
+    def __repr__(self) -> str:
+        return f"<Feedback session={self.session_id} rating={self.rating}>"

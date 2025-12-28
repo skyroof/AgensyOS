@@ -11,6 +11,9 @@ class DiagnosticStates(StatesGroup):
     choosing_role = State()
     choosing_experience = State()
     
+    # Онбординг с правилами
+    onboarding = State()
+    
     # Подтверждение старта
     ready_to_start = State()
     
@@ -19,6 +22,10 @@ class DiagnosticStates(StatesGroup):
     
     # Подтверждение ответа перед отправкой
     confirming_answer = State()
+    
+    # Сбор feedback
+    feedback_rating = State()
+    feedback_comment = State()
     
     # Завершение
     finished = State()
