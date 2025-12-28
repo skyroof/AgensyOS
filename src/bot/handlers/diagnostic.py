@@ -2,6 +2,8 @@
 Обработчик диагностики — flow 10 вопросов с AI.
 """
 import logging
+import asyncio
+import time
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -93,28 +95,61 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         "answer": message.text,
     })
     
-    # Анализируем ответ через AI
-    analysis = None
-    try:
-        analysis = await analyze_answer(
-            question=current_question,
-            answer=message.text,
-            role=data["role"],
-        )
-        analysis_history.append(analysis)
-        logger.info(f"Answer {current} analyzed: {analysis.get('scores', {})}")
-    except Exception as e:
-        logger.error(f"Analysis failed: {e}")
-        analysis = {
-            "scores": {"depth": 5, "self_awareness": 5, "structure": 5, "honesty": 5, "expertise": 5},
-            "key_insights": [],
-            "gaps": [],
-            "hypothesis": "Анализ недоступен",
-        }
-        analysis_history.append(analysis)
+    # Подготавливаем данные
+    db_session_id = data.get("db_session_id")
+    next_question_num = current + 1
+    start_time = time.perf_counter()
+    
+    # === ПАРАЛЛЕЛЬНЫЕ AI-ЗАПРОСЫ ===
+    # Запускаем анализ ответа и генерацию следующего вопроса одновременно
+    
+    async def _analyze():
+        """Анализ текущего ответа."""
+        try:
+            return await analyze_answer(
+                question=current_question,
+                answer=message.text,
+                role=data["role"],
+            )
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}")
+            return {
+                "scores": {"depth": 5, "self_awareness": 5, "structure": 5, "honesty": 5, "expertise": 5},
+                "key_insights": [],
+                "gaps": [],
+                "hypothesis": "Анализ недоступен",
+            }
+    
+    async def _generate_next():
+        """Генерация следующего вопроса (если нужен)."""
+        if next_question_num > TOTAL_QUESTIONS:
+            return None
+        try:
+            return await generate_question(
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data["experience_name"],
+                question_number=next_question_num,
+                conversation_history=conversation_history,
+                analysis_history=analysis_history,  # Используем текущую историю
+            )
+        except Exception as e:
+            logger.error(f"Question generation failed: {e}")
+            return f"Вопрос {next_question_num}: Расскажи подробнее о своём опыте."
+    
+    # Запускаем параллельно
+    if next_question_num <= TOTAL_QUESTIONS:
+        analysis, next_question = await asyncio.gather(_analyze(), _generate_next())
+    else:
+        analysis = await _analyze()
+        next_question = None
+    
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    logger.info(f"Answer {current} analyzed: {analysis.get('scores', {})} | Next Q generated | {duration_ms:.0f}ms total")
+    
+    analysis_history.append(analysis)
     
     # Сохраняем ответ в БД
-    db_session_id = data.get("db_session_id")
     if db_session_id:
         try:
             async with get_session() as db:
@@ -129,22 +164,8 @@ async def process_answer(message: Message, state: FSMContext, bot: Bot):
         except Exception as e:
             logger.error(f"Failed to save answer to DB: {e}")
     
-    next_question_num = current + 1
-    
     # Проверяем, есть ли ещё вопросы
     if next_question_num <= TOTAL_QUESTIONS:
-        # Обновляем статус
-        await thinking_msg.edit_text(f"✅ Ответ принят\n\n🔍 Готовлю вопрос {next_question_num}...")
-        
-        # Генерируем следующий вопрос
-        next_question = await generate_question(
-            role=data["role"],
-            role_name=data["role_name"],
-            experience=data["experience_name"],
-            question_number=next_question_num,
-            conversation_history=conversation_history,
-            analysis_history=analysis_history,
-        )
         
         await state.update_data(
             current_question=next_question_num,
