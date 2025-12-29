@@ -5,7 +5,16 @@ import asyncio
 import logging
 import sys
 
+import sentry_sdk
+
 from aiogram import Bot, Dispatcher
+
+# Sentry для мониторинга ошибок
+sentry_sdk.init(
+    dsn="https://e1fcaa6128a4bde0ad242461c6058ab2@o4510615985061888.ingest.de.sentry.io/4510615988404304",
+    send_default_pii=True,
+    traces_sample_rate=0.1,  # 10% трейсов для производительности
+)
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -15,6 +24,17 @@ from src.bot.handlers import start, diagnostic, history, voice
 from src.bot.middlewares.error_handler import ErrorHandlerMiddleware
 from src.bot.middlewares.logging_middleware import LoggingMiddleware
 from src.db import init_db, close_db
+
+
+ADMIN_ID = 785561885  # @laitnerbro — для алертов
+
+
+async def send_admin_alert(bot, message: str):
+    """Отправить алерт админу."""
+    try:
+        await bot.send_message(ADMIN_ID, f"🔔 <b>Bot Alert</b>\n\n{message}")
+    except Exception:
+        pass
 
 
 async def main():
@@ -60,9 +80,16 @@ async def main():
     logger.info(f"🤖 AI Model: {settings.ai_model}")
     
     try:
+        # Алерт о запуске
+        await send_admin_alert(bot, "✅ Бот успешно запущен на сервере!")
         await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}")
+        await send_admin_alert(bot, f"❌ Критическая ошибка:\n<code>{e}</code>")
+        raise
     finally:
         logger.info("🛑 Бот останавливается...")
+        await send_admin_alert(bot, "🛑 Бот остановлен")
         await close_db()
         await bot.session.close()
 

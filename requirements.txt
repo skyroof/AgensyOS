@@ -26,6 +26,9 @@ Pillow==10.4.0
 # Voice (Whisper)
 # openai-whisper==20231117  # опционально, для локального распознавания
 
+# Monitoring
+sentry-sdk==2.19.2
+
 # Dev
 pytest==8.3.4
 pytest-asyncio==0.25.0
