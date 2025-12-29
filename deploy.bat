@@ -1,5 +1,5 @@
 @echo off
 git add .
-git commit -m "Fix: add DejaVu fonts for Cyrillic PDF support"
+git commit -m "Add Montserrat font for premium PDF"
 git push origin main
-ssh root@89.169.47.138 "cd /root/bot && git stash && git pull && git stash pop && docker compose down && docker compose up -d --build"
+ssh root@89.169.47.138 "cd /root/bot && git stash && git pull && git stash pop 2>/dev/null; docker compose down && docker compose up -d --build"

@@ -67,58 +67,80 @@ class Colors:
 # РЕГИСТРАЦИЯ ШРИФТОВ
 # ========================================
 
+import os
+
+# Шрифты Montserrat (приоритет) и fallback на системные
+FONT_PATHS = {
+    "regular": [
+        # Montserrat (Docker)
+        "/app/assets/fonts/Montserrat-Regular.ttf",
+        # Montserrat (Local)
+        "assets/fonts/Montserrat-Regular.ttf",
+        # Fallback: DejaVu (Linux)
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        # Fallback: Windows
+        "C:/Windows/Fonts/arial.ttf",
+    ],
+    "medium": [
+        "/app/assets/fonts/Montserrat-Medium.ttf",
+        "assets/fonts/Montserrat-Medium.ttf",
+    ],
+    "semibold": [
+        "/app/assets/fonts/Montserrat-SemiBold.ttf",
+        "assets/fonts/Montserrat-SemiBold.ttf",
+    ],
+    "bold": [
+        "/app/assets/fonts/Montserrat-Bold.ttf",
+        "assets/fonts/Montserrat-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+    ],
+}
+
+# Дефолтные шрифты
+FONT_REGULAR = 'Helvetica'
+FONT_MEDIUM = 'Helvetica'
+FONT_SEMIBOLD = 'Helvetica-Bold'
+FONT_BOLD = 'Helvetica-Bold'
+
+def register_font(name: str, paths: list[str]) -> str:
+    """Регистрирует первый найденный шрифт из списка путей."""
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont(name, path))
+                logger.info(f"✅ Registered font '{name}': {path}")
+                return name
+            except Exception as e:
+                logger.warning(f"Failed to register {path}: {e}")
+    return None
+
+# Регистрация шрифтов
 try:
-    import os
-    
-    # Пробуем найти системные шрифты (Windows + Linux)
-    font_paths = {
-        "regular": [
-            # Linux (DejaVu - поддерживает кириллицу)
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            # Linux (Liberation)
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            # Windows
-            "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/calibri.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-        ],
-        "bold": [
-            # Linux (DejaVu)
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-            # Linux (Liberation)
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            # Windows
-            "C:/Windows/Fonts/arialbd.ttf",
-            "C:/Windows/Fonts/calibrib.ttf",
-            "C:/Windows/Fonts/segoeuib.ttf",
-        ],
-    }
-    
-    FONT_NAME = 'Helvetica'
-    FONT_BOLD = 'Helvetica-Bold'
-    
-    for font_path in font_paths["regular"]:
-        if os.path.exists(font_path):
-            pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-            FONT_NAME = 'CustomFont'
-            logger.info(f"Registered font: {font_path}")
-            break
-    
-    for font_path in font_paths["bold"]:
-        if os.path.exists(font_path):
-            pdfmetrics.registerFont(TTFont('CustomFontBold', font_path))
-            FONT_BOLD = 'CustomFontBold'
-            logger.info(f"Registered bold font: {font_path}")
-            break
-            
+    if reg := register_font('Montserrat', FONT_PATHS["regular"]):
+        FONT_REGULAR = reg
+    if reg := register_font('Montserrat-Medium', FONT_PATHS["medium"]):
+        FONT_MEDIUM = reg
+    if reg := register_font('Montserrat-SemiBold', FONT_PATHS["semibold"]):
+        FONT_SEMIBOLD = reg
+    if reg := register_font('Montserrat-Bold', FONT_PATHS["bold"]):
+        FONT_BOLD = reg
+        
+    # Регистрируем font family для использования в HTML
+    from reportlab.pdfbase.pdfmetrics import registerFontFamily
+    if FONT_REGULAR.startswith('Montserrat'):
+        registerFontFamily(
+            'Montserrat',
+            normal=FONT_REGULAR,
+            bold=FONT_BOLD,
+        )
+        logger.info("✅ Montserrat font family registered")
+        
 except Exception as e:
-    logger.warning(f"Failed to register fonts: {e}")
-    FONT_NAME = 'Helvetica'
-    FONT_BOLD = 'Helvetica-Bold'
+    logger.warning(f"Font registration error: {e}")
+
+# Aliases для совместимости
+FONT_NAME = FONT_REGULAR
 
 
 # ========================================
