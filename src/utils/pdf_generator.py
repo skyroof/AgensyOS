@@ -322,6 +322,39 @@ class ScoreCircle(Flowable):
             canvas.drawCentredString(cx, cy - 32, self.sublabel)
 
 
+class SectionDivider(Flowable):
+    """Визуальный разделитель между секциями."""
+    
+    def __init__(self, width: float = 180*mm, style: str = "line"):
+        Flowable.__init__(self)
+        self.width = width
+        self.height = 15
+        self.style = style  # "line", "dots", "gradient"
+    
+    def draw(self):
+        canvas = self.canv
+        y = self.height / 2
+        
+        if self.style == "line":
+            # Простая линия с градиентом от краёв
+            canvas.setStrokeColor(Colors.BORDER)
+            canvas.setLineWidth(1)
+            canvas.line(self.width * 0.1, y, self.width * 0.9, y)
+            
+        elif self.style == "dots":
+            # Точки
+            canvas.setFillColor(Colors.TEXT_MUTED)
+            for i in range(5):
+                x = self.width / 2 - 20 + i * 10
+                canvas.circle(x, y, 2, stroke=0, fill=1)
+                
+        elif self.style == "gradient":
+            # Акцентная линия
+            canvas.setStrokeColor(Colors.ACCENT)
+            canvas.setLineWidth(2)
+            canvas.line(self.width * 0.3, y, self.width * 0.7, y)
+
+
 class CategoryBadge(Flowable):
     """Цветной badge для категории с баллом."""
     
@@ -599,6 +632,65 @@ class BenchmarkBar(Flowable):
 
 
 # ========================================
+# PAGE TEMPLATES (HEADER/FOOTER)
+# ========================================
+
+def _add_page_number(canvas, doc):
+    """Добавляет номер страницы в footer."""
+    page_num = canvas.getPageNumber()
+    canvas.saveState()
+    
+    # Footer: номер страницы
+    canvas.setFont(FONT_REGULAR, 9)
+    canvas.setFillColor(Colors.TEXT_MUTED)
+    canvas.drawCentredString(A4[0] / 2, 12*mm, f"— {page_num} —")
+    
+    # Footer: дата справа
+    canvas.setFont(FONT_REGULAR, 7)
+    canvas.drawRightString(A4[0] - 15*mm, 12*mm, datetime.now().strftime('%d.%m.%Y'))
+    
+    # Footer: бренд слева
+    canvas.drawString(15*mm, 12*mm, "Deep Diagnostic")
+    
+    canvas.restoreState()
+
+
+def _add_first_page(canvas, doc):
+    """Header для первой страницы — тёмная полоса сверху."""
+    canvas.saveState()
+    
+    # Тёмная полоса-header (gradient эффект)
+    header_height = 25*mm
+    canvas.setFillColor(Colors.PRIMARY)
+    canvas.rect(0, A4[1] - header_height, A4[0], header_height, stroke=0, fill=1)
+    
+    # Акцентная линия под header
+    canvas.setStrokeColor(Colors.ACCENT)
+    canvas.setLineWidth(3)
+    canvas.line(0, A4[1] - header_height, A4[0], A4[1] - header_height)
+    
+    canvas.restoreState()
+    
+    # Номер страницы
+    _add_page_number(canvas, doc)
+
+
+def _add_later_pages(canvas, doc):
+    """Header для остальных страниц."""
+    canvas.saveState()
+    
+    # Тонкая линия сверху
+    canvas.setStrokeColor(Colors.BORDER)
+    canvas.setLineWidth(0.5)
+    canvas.line(15*mm, A4[1] - 10*mm, A4[0] - 15*mm, A4[1] - 10*mm)
+    
+    canvas.restoreState()
+    
+    # Номер страницы
+    _add_page_number(canvas, doc)
+
+
+# ========================================
 # ОСНОВНОЙ ГЕНЕРАТОР
 # ========================================
 
@@ -639,8 +731,8 @@ def generate_pdf_report(
         pagesize=A4,
         rightMargin=15*mm,
         leftMargin=15*mm,
-        topMargin=15*mm,
-        bottomMargin=15*mm,
+        topMargin=30*mm,  # Увеличен для header
+        bottomMargin=20*mm,  # Место для footer
     )
     
     # Стили
@@ -1184,8 +1276,12 @@ def generate_pdf_report(
         footer_style
     ))
     
-    # Генерируем PDF
-    doc.build(elements)
+    # Генерируем PDF с кастомными header/footer
+    doc.build(
+        elements,
+        onFirstPage=_add_first_page,
+        onLaterPages=_add_later_pages,
+    )
     
     pdf_bytes = buffer.getvalue()
     buffer.close()
