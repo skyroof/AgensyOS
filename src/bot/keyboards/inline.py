@@ -70,10 +70,34 @@ def get_confirm_answer_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_onboarding_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура онбординга."""
+    """Клавиатура онбординга (шаг 1)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="👉 Далее", callback_data="onboarding_step2"),
+    )
+    return builder.as_markup()
+
+
+def get_onboarding_step2_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура онбординга (шаг 2 — пример ответа)."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="✅ Понятно, начинаем!", callback_data="onboarding_done"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="onboarding_back"),
+    )
+    return builder.as_markup()
+
+
+def get_returning_user_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для возвращающегося пользователя (skip onboarding)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🚀 Погнали!", callback_data="skip_onboarding"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📋 Напомни правила", callback_data="show_onboarding"),
     )
     return builder.as_markup()
 
@@ -105,5 +129,128 @@ def get_skip_comment_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_feedback_comment"),
+    )
+    return builder.as_markup()
+
+
+def get_result_summary_keyboard(session_id: int) -> InlineKeyboardMarkup:
+    """
+    Клавиатура после Summary Card — минималистичная, 2 ряда.
+    Детали доступны по кнопкам, не спамим чат.
+    """
+    builder = InlineKeyboardBuilder()
+    # Основные действия — подробности в одно сообщение каждое
+    builder.row(
+        InlineKeyboardButton(text="📊 Подробнее", callback_data=f"show:report:{session_id}"),
+        InlineKeyboardButton(text="📈 План", callback_data=f"show:pdp:{session_id}"),
+        InlineKeyboardButton(text="📄 PDF", callback_data=f"pdf:{session_id}"),
+    )
+    # Вторичные действия
+    builder.row(
+        InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:{session_id}"),
+        InlineKeyboardButton(text="🔄 Ещё раз", callback_data="restart"),
+    )
+    return builder.as_markup()
+
+
+def get_back_to_summary_keyboard(session_id: int) -> InlineKeyboardMarkup:
+    """Кнопка возврата к summary после просмотра блока."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад к результатам", callback_data=f"show:summary:{session_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📄 Скачать PDF", callback_data=f"pdf:{session_id}"),
+    )
+    return builder.as_markup()
+
+
+def get_delayed_feedback_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для отложенного feedback (упрощённая)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="👍", callback_data="quick_feedback:good"),
+        InlineKeyboardButton(text="👎", callback_data="quick_feedback:bad"),
+        InlineKeyboardButton(text="💬 Подробнее", callback_data="quick_feedback:detailed"),
+    )
+    return builder.as_markup()
+
+
+def get_session_recovery_keyboard(session_id: int, current_q: int, total_q: int = 10) -> InlineKeyboardMarkup:
+    """Клавиатура для восстановления незавершённой сессии."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=f"▶️ Продолжить ({current_q}/{total_q})",
+            callback_data=f"continue_session:{session_id}",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🔄 Начать заново", callback_data="restart_fresh"),
+    )
+    return builder.as_markup()
+
+
+def get_pause_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура паузы во время диагностики (добавляется к confirm)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Отправить", callback_data="confirm_answer"),
+        InlineKeyboardButton(text="✏️ Изменить", callback_data="edit_answer"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="⏸️ Пауза", callback_data="pause_session"),
+    )
+    return builder.as_markup()
+
+
+def get_error_retry_keyboard(retry_action: str = "retry_analysis") -> InlineKeyboardMarkup:
+    """Клавиатура для ошибок с кнопкой повтора."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔄 Попробовать ещё раз", callback_data=retry_action),
+    )
+    builder.row(
+        InlineKeyboardButton(text="⏸️ Пауза", callback_data="pause_session"),
+        InlineKeyboardButton(text="🏠 В начало", callback_data="restart"),
+    )
+    return builder.as_markup()
+
+
+def get_timeout_keyboard(retry_action: str = "retry_analysis") -> InlineKeyboardMarkup:
+    """Клавиатура для таймаута."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⏳ Подождать ещё", callback_data="wait_more"),
+        InlineKeyboardButton(text="🔄 Повторить", callback_data=retry_action),
+    )
+    builder.row(
+        InlineKeyboardButton(text="⏸️ Пауза", callback_data="pause_session"),
+    )
+    return builder.as_markup()
+
+
+def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
+    """Универсальная клавиатура для возврата в меню."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔄 Пройти снова", callback_data="restart"),
+        InlineKeyboardButton(text="📊 История", callback_data="show_history"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🏠 В главное меню", callback_data="main_menu"),
+    )
+    return builder.as_markup()
+
+
+def get_after_share_keyboard(session_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура после шаринга — вернуться к результатам."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📋 К результатам", callback_data=f"back_to_results:{session_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🔄 Пройти снова", callback_data="restart"),
+        InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu"),
     )
     return builder.as_markup()

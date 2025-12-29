@@ -20,6 +20,9 @@ httpx==0.28.1
 # PDF Generation
 reportlab==4.2.5
 
+# Image Generation (Share Cards)
+Pillow==10.4.0
+
 # Voice (Whisper)
 # openai-whisper==20231117  # опционально, для локального распознавания
 

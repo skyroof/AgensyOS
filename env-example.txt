@@ -1,0 +1,22 @@
+# ========================================
+# Deep Diagnostic Bot — Environment Variables
+# ========================================
+# Скопируй в .env и заполни свои значения
+
+# Telegram Bot Token (получить у @BotFather)
+BOT_TOKEN=your_telegram_bot_token
+
+# RouterAI (https://routerai.ru/)
+ROUTERAI_API_KEY=your_routerai_api_key
+ROUTERAI_BASE_URL=https://routerai.ru/api/v1
+
+# AI Model
+AI_MODEL=anthropic/claude-sonnet-4.5
+
+# Database (оставь пустым для SQLite или укажи PostgreSQL)
+# DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
+
+# App
+DEBUG=false
+LOG_LEVEL=INFO
+

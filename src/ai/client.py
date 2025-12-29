@@ -81,9 +81,9 @@ def get_ai_client() -> AsyncOpenAI:
         
         logger.info(f"Initializing AI client: base_url={settings.routerai_base_url}, model={settings.ai_model}")
         
-        # Создаём httpx клиент с таймаутами
+        # Создаём httpx клиент с таймаутами (60 сек max, 15 сек connect)
         http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(120.0, connect=30.0),
+            timeout=httpx.Timeout(60.0, connect=15.0),
             follow_redirects=True,
         )
         

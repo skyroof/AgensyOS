@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Виртуальное окружение
+.venv
+venv
+env
+
+# IDE
+.cursor
+.vscode
+.idea
+
+# Тесты и документация
+TEST
+tests
+*.md
+!README.md
+
+# Локальные файлы
+*.db
+*.log
+*.pdf
+*.png
+
+# Env файлы (кроме example)
+.env
+.env.*
+!env-example.txt
+

@@ -9,6 +9,19 @@ from aiogram.filters import Command
 from src.db import get_session
 from src.db.repositories import get_user_by_telegram_id, get_user_sessions, get_session_by_id
 from src.utils.pdf_generator import generate_pdf_report
+from src.bot.keyboards.inline import (
+    get_back_to_menu_keyboard,
+    get_after_share_keyboard,
+    get_result_summary_keyboard,
+)
+from src.analytics import (
+    build_profile, format_profile_text, 
+    get_benchmark, format_benchmark_text,
+    get_user_progress, format_progress_text,
+    build_pdp, format_pdp_text,
+)
+from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores
+from src.ai.report_gen import split_message
 
 router = Router(name="history")
 logger = logging.getLogger(__name__)
@@ -23,8 +36,8 @@ async def cmd_history(message: Message):
             
             if not user:
                 await message.answer(
-                    "📭 У тебя ещё нет истории диагностик.\n\n"
-                    "Нажми /start чтобы пройти первую!"
+                    "📭 У тебя ещё нет истории диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
                 )
                 return
             
@@ -32,8 +45,8 @@ async def cmd_history(message: Message):
             
             if not sessions:
                 await message.answer(
-                    "📭 У тебя ещё нет завершённых диагностик.\n\n"
-                    "Нажми /start чтобы пройти первую!"
+                    "📭 У тебя ещё нет завершённых диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
                 )
                 return
             
@@ -54,9 +67,10 @@ async def cmd_history(message: Message):
                     f"   📅 {date_str} | {score_str}"
                 )
             
-            lines.append("\n\nНажми /start для новой диагностики")
-            
-            await message.answer("\n".join(lines))
+            await message.answer(
+                "\n".join(lines),
+                reply_markup=get_back_to_menu_keyboard(),
+            )
             
     except Exception as e:
         logger.error(f"Failed to get history: {e}")
@@ -74,6 +88,9 @@ async def cmd_help(message: Message):
 <b>Команды:</b>
 /start — начать новую диагностику
 /history — посмотреть прошлые результаты
+/profile — посмотреть свой профиль компетенций
+/pdp — персональный план развития
+/progress — отслеживать прогресс между диагностиками
 /help — эта справка
 
 <b>Как это работает:</b>
@@ -89,8 +106,258 @@ async def cmd_help(message: Message):
 • Mindset (20 баллов)
 
 <b>Совет:</b> Чем подробнее отвечаешь — тем точнее диагностика!
+
+<b>Доступность:</b> /accessibility — подсказки для удобства
 """
     await message.answer(help_text)
+
+
+@router.message(Command("accessibility"))
+async def cmd_accessibility(message: Message):
+    """Показать подсказки по доступности."""
+    from src.bot.keyboards.reply import get_accessibility_hint
+    
+    accessibility_text = f"""
+♿ <b>Настройки доступности</b>
+
+<b>📱 Увеличить шрифт:</b>
+Настройки Telegram → Размер текста чата
+
+<b>🎤 Голосовые ответы:</b>
+Вместо текста можешь записать голосовое сообщение — 
+бот его расшифрует и покажет для проверки.
+
+<b>⌨️ Навигация:</b>
+Все кнопки доступны с клавиатуры. 
+Используй Tab и Enter для навигации.
+
+<b>📖 Экранные читалки:</b>
+Бот совместим с TalkBack (Android) и VoiceOver (iOS).
+Все элементы имеют текстовые описания.
+
+<b>🌐 Язык:</b>
+Бот автоматически определяет язык ответа.
+Можешь отвечать на русском или английском.
+
+<b>⏱️ Без ограничения времени:</b>
+На ответы нет таймера — думай сколько нужно.
+Сессия сохраняется автоматически.
+
+━━━━━━━━━━━━━━━━━━━━
+
+💡 <i>Если есть предложения по улучшению доступности — 
+напиши в /help</i>
+"""
+    await message.answer(accessibility_text)
+
+
+@router.message(Command("profile"))
+async def cmd_profile(message: Message):
+    """Показать профиль компетенций из последней диагностики."""
+    try:
+        async with get_session() as db:
+            user = await get_user_by_telegram_id(db, message.from_user.id)
+            
+            if not user:
+                await message.answer(
+                    "📭 У тебя ещё нет профиля.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            sessions = await get_user_sessions(db, user.id, limit=1)
+            
+            if not sessions or sessions[0].status != "completed":
+                await message.answer(
+                    "📭 Нет завершённых диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            session = sessions[0]
+            
+            # Восстанавливаем analysis_history
+            analysis_history = session.analysis_history or []
+            if not analysis_history:
+                await message.answer(
+                    "⚠️ Данные для профиля недоступны.\n\n"
+                    "Пройди новую диагностику: /start"
+                )
+                return
+            
+            # Рассчитываем scores
+            raw_scores = calculate_category_scores(analysis_history)
+            scores = calibrate_scores(raw_scores, session.experience)
+            
+            # Строим профиль
+            profile = build_profile(
+                role=session.role,
+                role_name=session.role_name,
+                experience=session.experience,
+                experience_name=session.experience_name,
+                scores=scores,
+                analysis_history=analysis_history,
+            )
+            
+            profile_text = format_profile_text(profile)
+            
+            # Отправляем по частям если длинный
+            parts = split_message(profile_text, max_length=3500)
+            for part in parts:
+                try:
+                    await message.answer(part)
+                except Exception as e:
+                    logger.warning(f"Profile HTML error: {e}")
+                    await message.answer(part, parse_mode=None)
+            
+            # Добавляем бенчмарк
+            try:
+                benchmark = await get_benchmark(
+                    session=db,
+                    user_score=session.total_score or 0,
+                    role=session.role,
+                    role_name=session.role_name,
+                    experience=session.experience,
+                    experience_name=session.experience_name,
+                )
+                
+                if benchmark.has_enough_data or benchmark.overall_total_sessions > 0:
+                    benchmark_text = format_benchmark_text(benchmark, session.total_score or 0)
+                    await message.answer(benchmark_text)
+            except Exception as e:
+                logger.warning(f"Failed to get benchmark in /profile: {e}")
+            
+            # Добавляем дату диагностики
+            date_str = session.completed_at.strftime("%d.%m.%Y") if session.completed_at else "Неизвестно"
+            await message.answer(
+                f"<i>Профиль на основе диагностики от {date_str}</i>",
+                reply_markup=get_back_to_menu_keyboard(),
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to get profile: {e}")
+        await message.answer("❌ Не удалось загрузить профиль. Попробуй позже.")
+
+
+@router.message(Command("progress"))
+async def cmd_progress(message: Message):
+    """Показать прогресс между диагностиками."""
+    try:
+        async with get_session() as db:
+            user = await get_user_by_telegram_id(db, message.from_user.id)
+            
+            if not user:
+                await message.answer(
+                    "📊 <b>Прогресс</b>\n\n"
+                    "У тебя ещё нет диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            # Получаем отчёт о прогрессе
+            progress = await get_user_progress(db, user.id)
+            
+            # Форматируем и отправляем
+            progress_text = format_progress_text(progress)
+            
+            # Разбиваем на части если длинный
+            parts = split_message(progress_text, max_length=3500)
+            for part in parts:
+                try:
+                    await message.answer(part)
+                except Exception as e:
+                    logger.warning(f"Progress HTML error: {e}")
+                    await message.answer(part, parse_mode=None)
+            
+    except Exception as e:
+        logger.error(f"Failed to get progress: {e}")
+        await message.answer("❌ Не удалось загрузить прогресс. Попробуй позже.")
+
+
+@router.message(Command("pdp"))
+async def cmd_pdp(message: Message):
+    """Показать персональный план развития."""
+    try:
+        async with get_session() as db:
+            user = await get_user_by_telegram_id(db, message.from_user.id)
+            
+            if not user:
+                await message.answer(
+                    "🎯 <b>План развития</b>\n\n"
+                    "У тебя ещё нет диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            sessions = await get_user_sessions(db, user.id, limit=1)
+            
+            if not sessions or sessions[0].status != "completed":
+                await message.answer(
+                    "🎯 <b>План развития</b>\n\n"
+                    "Нет завершённых диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            session = sessions[0]
+            
+            # Восстанавливаем analysis_history
+            analysis_history = session.analysis_history or []
+            if not analysis_history:
+                await message.answer(
+                    "⚠️ Данные для плана недоступны.\n\n"
+                    "Пройди новую диагностику: /start"
+                )
+                return
+            
+            # Рассчитываем scores
+            raw_scores = calculate_category_scores(analysis_history)
+            calibrated = calibrate_scores(raw_scores, session.experience)
+            
+            # Строим профиль для strengths
+            profile = build_profile(
+                role=session.role,
+                role_name=session.role_name,
+                experience=session.experience,
+                experience_name=session.experience_name,
+                scores=calibrated,
+                analysis_history=analysis_history,
+            )
+            
+            # Строим PDP
+            raw_averages = calibrated.get("raw_averages", {})
+            pdp = build_pdp(
+                role=session.role,
+                role_name=session.role_name,
+                experience=session.experience,
+                experience_name=session.experience_name,
+                total_score=session.total_score or 0,
+                raw_averages=raw_averages,
+                strengths=profile.strengths,
+            )
+            
+            pdp_text = format_pdp_text(pdp)
+            
+            # Отправляем по частям если длинный
+            parts = split_message(pdp_text, max_length=3800)
+            for part in parts:
+                try:
+                    await message.answer(part)
+                except Exception as e:
+                    logger.warning(f"PDP HTML error: {e}")
+                    await message.answer(part, parse_mode=None)
+            
+            # Дата диагностики
+            date_str = session.completed_at.strftime("%d.%m.%Y") if session.completed_at else "Неизвестно"
+            await message.answer(
+                f"<i>План на основе диагностики от {date_str}</i>\n\n"
+                f"🔄 Обновить результаты: /start\n"
+                f"📊 Отследить прогресс: /progress"
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to get PDP: {e}")
+        await message.answer("❌ Не удалось загрузить план развития. Попробуй позже.")
 
 
 @router.callback_query(F.data.startswith("pdf:"))
@@ -123,6 +390,90 @@ async def process_pdf_download(callback: CallbackQuery):
             
             conversation_history = diagnostic_session.conversation_history or []
             report_text = diagnostic_session.report or "Отчёт недоступен"
+            analysis_history = diagnostic_session.analysis_history or []
+            
+            # Строим профиль, PDP и бенчмарк для PDF
+            profile_data = None
+            pdp_data = None
+            benchmark_data = None
+            raw_averages = None
+            
+            if analysis_history:
+                try:
+                    raw_scores = calculate_category_scores(analysis_history)
+                    calibrated = calibrate_scores(raw_scores, diagnostic_session.experience)
+                    raw_averages = calibrated.get("raw_averages", {})
+                    
+                    profile = build_profile(
+                        role=diagnostic_session.role,
+                        role_name=diagnostic_session.role_name,
+                        experience=diagnostic_session.experience,
+                        experience_name=diagnostic_session.experience_name,
+                        scores=calibrated,
+                        analysis_history=analysis_history,
+                    )
+                    # Преобразуем в dict для PDF
+                    from src.ai.answer_analyzer import METRIC_NAMES_RU
+                    profile_data = {
+                        "strengths": [METRIC_NAMES_RU.get(s, s) for s in profile.strengths],
+                        "growth_areas": [METRIC_NAMES_RU.get(g, g) for g in profile.growth_areas],
+                        "thinking_style": profile.thinking_style_description[:100] if profile.thinking_style_description else "",
+                        "communication_style": profile.communication_style_description[:100] if profile.communication_style_description else "",
+                    }
+                    
+                    # Строим PDP
+                    pdp = build_pdp(
+                        role=diagnostic_session.role,
+                        role_name=diagnostic_session.role_name,
+                        experience=diagnostic_session.experience,
+                        experience_name=diagnostic_session.experience_name,
+                        total_score=diagnostic_session.total_score or 0,
+                        raw_averages=raw_averages,
+                        strengths=profile.strengths,
+                    )
+                    
+                    # Преобразуем PDP в dict для PDF
+                    pdp_data = {
+                        "main_focus": pdp.main_focus,
+                        "motivation_message": pdp.motivation_message,
+                        "plan_30_days": pdp.plan_30_days,
+                        "plan_60_days": pdp.plan_60_days,
+                        "plan_90_days": pdp.plan_90_days,
+                        "success_metrics": pdp.success_metrics,
+                        "primary_goals": [
+                            {
+                                "metric_name": g.metric_name,
+                                "current_score": g.current_score,
+                                "target_score": g.target_score,
+                                "resources": [
+                                    {"title": r.title, "type": r.type}
+                                    for r in g.resources[:2]
+                                ] if g.resources else [],
+                            }
+                            for g in pdp.primary_goals
+                        ],
+                    }
+                    
+                    # Получаем бенчмарк
+                    try:
+                        benchmark = await get_benchmark(
+                            session=db,
+                            user_score=diagnostic_session.total_score or 0,
+                            role=diagnostic_session.role,
+                            role_name=diagnostic_session.role_name,
+                            experience=diagnostic_session.experience,
+                            experience_name=diagnostic_session.experience_name,
+                        )
+                        if benchmark.overall_total_sessions > 0:
+                            benchmark_data = {
+                                "avg_score": benchmark.overall_avg_score,
+                                "percentile": benchmark.overall_percentile,
+                            }
+                    except Exception as e:
+                        logger.warning(f"Failed to get benchmark for PDF: {e}")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to build profile/PDP for PDF: {e}")
             
             # Получаем имя пользователя
             user_name = callback.from_user.first_name or "Кандидат"
@@ -140,6 +491,10 @@ async def process_pdf_download(callback: CallbackQuery):
                     report_text=report_text,
                     conversation_history=conversation_history,
                     user_name=user_name,
+                    profile_data=profile_data,
+                    pdp_data=pdp_data,
+                    benchmark_data=benchmark_data,
+                    raw_averages=raw_averages,
                 )
                 
                 # Формируем имя файла
@@ -165,4 +520,167 @@ async def process_pdf_download(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Failed to generate PDF: {e}")
         await callback.message.answer("❌ Ошибка при создании PDF.")
+
+
+@router.callback_query(F.data.startswith("share:"))
+async def process_share_card(callback: CallbackQuery):
+    """Генерация и отправка Share Card (PNG) для соцсетей."""
+    await callback.answer("📤 Создаю картинку...")
+    
+    session_id = int(callback.data.split(":")[1])
+    
+    try:
+        async with get_session() as db:
+            from src.db.repositories import get_session_by_id
+            
+            diagnostic_session = await get_session_by_id(db, session_id)
+            
+            if not diagnostic_session:
+                await callback.message.answer("❌ Сессия не найдена.")
+                return
+            
+            status_msg = await callback.message.answer("🎨 Генерирую карточку для шаринга...")
+            
+            try:
+                from src.utils.share_card import generate_share_card
+                from aiogram.types import BufferedInputFile
+                
+                # Собираем данные для карточки
+                category_scores = {
+                    "hard_skills": diagnostic_session.hard_skills_score or 0,
+                    "soft_skills": diagnostic_session.soft_skills_score or 0,
+                    "thinking": diagnostic_session.thinking_score or 0,
+                    "mindset": diagnostic_session.mindset_score or 0,
+                }
+                
+                # Генерируем PNG
+                png_bytes = generate_share_card(
+                    total_score=diagnostic_session.total_score or 0,
+                    role_name=diagnostic_session.role_name,
+                    category_scores=category_scores,
+                )
+                
+                # Отправляем как фото
+                photo = BufferedInputFile(png_bytes, filename="diagnostic_result.png")
+                
+                # Формируем deep link
+                bot_username = "deep_diagnostic_bot"  # TODO: получать динамически
+                share_text = (
+                    f"🎯 Прошёл диагностику {diagnostic_session.role_name}!\n"
+                    f"Мой результат: {diagnostic_session.total_score}/100\n\n"
+                    f"Пройди и ты: https://t.me/{bot_username}"
+                )
+                
+                await callback.message.answer_photo(
+                    photo=photo,
+                    caption=f"📤 <b>Поделись своим результатом!</b>\n\n"
+                            f"<code>{share_text}</code>\n\n"
+                            f"<i>Скопируй текст или сохрани картинку</i>",
+                    reply_markup=get_after_share_keyboard(session_id),
+                )
+                
+                await status_msg.delete()
+                
+            except Exception as e:
+                logger.error(f"Share card generation failed: {e}")
+                await status_msg.edit_text("❌ Не удалось создать картинку. Попробуй позже.")
+                
+    except Exception as e:
+        logger.error(f"Failed to generate share card: {e}")
+        await callback.message.answer("❌ Ошибка при создании картинки.")
+
+
+# ==================== NAVIGATION CALLBACKS ====================
+
+@router.callback_query(F.data == "show_history")
+async def show_history_callback(callback: CallbackQuery):
+    """Показ истории через callback."""
+    await callback.answer()
+    
+    try:
+        async with get_session() as db:
+            user = await get_user_by_telegram_id(db, callback.from_user.id)
+            
+            if not user:
+                await callback.message.edit_text(
+                    "📭 У тебя ещё нет истории диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            sessions = await get_user_sessions(db, user.id, limit=5)
+            
+            if not sessions:
+                await callback.message.edit_text(
+                    "📭 У тебя ещё нет завершённых диагностик.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            # Формируем список
+            lines = ["📊 <b>Твои последние диагностики:</b>\n"]
+            for i, sess in enumerate(sessions, 1):
+                date_str = sess.completed_at.strftime("%d.%m") if sess.completed_at else "—"
+                score_str = f"{sess.total_score}/100" if sess.total_score else "—"
+                status_emoji = "✅" if sess.status == "completed" else "⏳"
+                lines.append(
+                    f"{i}. {status_emoji} {sess.role_name} ({sess.experience_name})\n"
+                    f"   📅 {date_str} | {score_str}"
+                )
+            
+            await callback.message.edit_text(
+                "\n".join(lines),
+                reply_markup=get_back_to_menu_keyboard(),
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to get history via callback: {e}")
+        await callback.message.edit_text(
+            "❌ Не удалось загрузить историю.",
+            reply_markup=get_back_to_menu_keyboard(),
+        )
+
+
+@router.callback_query(F.data.startswith("back_to_results:"))
+async def back_to_results(callback: CallbackQuery):
+    """Возврат к результатам сессии."""
+    await callback.answer()
+    
+    try:
+        session_id = int(callback.data.split(":")[1])
+        
+        async with get_session() as db:
+            diagnostic_session = await get_session_by_id(db, session_id)
+            
+            if not diagnostic_session:
+                await callback.message.answer(
+                    "❌ Сессия не найдена.",
+                    reply_markup=get_back_to_menu_keyboard(),
+                )
+                return
+            
+            from src.bot.keyboards.inline import get_result_summary_keyboard
+            
+            # Формируем summary card
+            summary = (
+                f"📊 <b>Результаты диагностики</b>\n\n"
+                f"👤 {diagnostic_session.role_name} ({diagnostic_session.experience_name})\n"
+                f"🏆 Общий балл: <b>{diagnostic_session.total_score}/100</b>\n"
+            )
+            
+            if diagnostic_session.completed_at:
+                date_str = diagnostic_session.completed_at.strftime("%d.%m.%Y")
+                summary += f"📅 {date_str}\n"
+            
+            await callback.message.answer(
+                summary,
+                reply_markup=get_result_summary_keyboard(session_id),
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to return to results: {e}")
+        await callback.message.answer(
+            "❌ Ошибка при загрузке результатов.",
+            reply_markup=get_back_to_menu_keyboard(),
+        )
 

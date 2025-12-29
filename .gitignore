@@ -26,3 +26,9 @@ Thumbs.db
 *.log
 debug_logs/
 
+# Test files
+TEST/
+*.pdf
+*.png
+test_*.py
+

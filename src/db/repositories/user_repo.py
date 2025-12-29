@@ -27,8 +27,8 @@ async def get_or_create_user(
     Returns:
         Объект пользователя
     """
-    # Ищем существующего
-    stmt = select(User).where(User.telegram_id == telegram_id)
+    # Ищем существующего (используем first() на случай дубликатов в БД)
+    stmt = select(User).where(User.telegram_id == telegram_id).limit(1)
     result = await session.execute(stmt)
     user = result.scalar_one_or_none()
     
@@ -66,7 +66,7 @@ async def get_or_create_user(
 
 async def get_user_by_telegram_id(session: AsyncSession, telegram_id: int) -> User | None:
     """Получить пользователя по Telegram ID."""
-    stmt = select(User).where(User.telegram_id == telegram_id)
+    stmt = select(User).where(User.telegram_id == telegram_id).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 

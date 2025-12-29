@@ -4,6 +4,7 @@
 import logging
 import asyncio
 import time
+import random
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -13,8 +14,12 @@ from src.bot.keyboards.inline import (
     get_restart_keyboard, 
     get_report_keyboard, 
     get_confirm_answer_keyboard,
+    get_pause_keyboard,
     get_feedback_rating_keyboard,
     get_skip_comment_keyboard,
+    get_result_summary_keyboard,
+    get_back_to_summary_keyboard,
+    get_delayed_feedback_keyboard,
 )
 from src.ai.question_gen import generate_question
 from src.ai.answer_analyzer import (
@@ -26,6 +31,7 @@ from src.ai.answer_analyzer import (
 )
 from src.ai.report_gen import generate_detailed_report, split_message, split_report_into_blocks, sanitize_html
 from src.ai.client import AIServiceError
+from src.analytics import build_profile, format_profile_text, get_benchmark, format_benchmark_text, build_pdp, format_pdp_text
 from src.db import get_session
 from src.db.repositories import save_answer, update_session_progress, complete_session, save_feedback
 
@@ -37,6 +43,203 @@ REMINDER_TIMEOUT = 5 * 60  # 5 минут
 
 # Хранилище таймеров напоминаний {chat_id: asyncio.Task}
 _reminder_tasks: dict[int, asyncio.Task] = {}
+
+
+def generate_progress_message(
+    current_question: int,
+    total_questions: int,
+    answer_stats: list[dict],
+    answer_text: str,
+) -> str:
+    """
+    Генерация сообщения с прогрессом и gamification.
+    
+    Включает:
+    - Визуальный прогресс-бар
+    - Milestone messages на 5, 8, 10 вопросе
+    - Micro-feedback по длине/скорости ответа
+    """
+    # Прогресс-бар
+    completed = current_question
+    remaining = total_questions - completed
+    filled = "█" * completed
+    empty = "░" * remaining
+    pct = int(completed / total_questions * 100)
+    
+    # Базовое сообщение
+    progress_bar = f"<code>{filled}{empty}</code> {pct}%"
+    
+    # Milestone messages (приоритетные)
+    milestone = ""
+    if current_question == 5:
+        milestone = "\n\n🎯 <b>Половина пути!</b>\nОтличный темп — продолжай в том же духе! 💪"
+    elif current_question == 8:
+        milestone = "\n\n🏁 <b>Финишная прямая!</b>\nОсталось всего 2 вопроса!"
+    elif current_question == 10:
+        milestone = "\n\n🎉 <b>Последний ответ принят!</b>\nСейчас подготовлю твой результат..."
+    
+    answer_len = len(answer_text)
+    
+    # Streak detection (быстрые/глубокие ответы подряд)
+    streak = ""
+    if len(answer_stats) >= 3:
+        recent = answer_stats[-3:]
+        avg_duration = sum(s["duration_sec"] for s in recent) / 3
+        if avg_duration < 120:  # Менее 2 минут в среднем
+            streak = "\n\n⚡ <i>Держишь отличный темп!</i>"
+        
+        # Считаем сколько глубоких ответов подряд (с конца)
+        deep_streak = 0
+        for stat in reversed(answer_stats):
+            if stat["length"] > 300:
+                deep_streak += 1
+            else:
+                break
+        
+        if deep_streak >= 3:
+            streak = f"\n\n🔥 <i>{deep_streak} глубоких ответов подряд — молодец!</i>"
+    
+    # Achievement для первого длинного ответа (ранний показатель)
+    if current_question <= 3 and answer_len > 400 and not any(s["length"] > 400 for s in answer_stats[:-1] if answer_stats):
+        streak = "\n\n🌟 <i>Сразу видно — ты подходишь серьёзно!</i>"
+    
+    # Рандомная позитивная реакция (если нет milestone или streak)
+    reaction = ""
+    if not milestone and not streak:
+        reaction = f"\n\n<i>{get_random_reaction(answer_len)}</i>"
+    
+    # Собираем финальное сообщение
+    header = f"✅ <b>Ответ {current_question}/{total_questions} принят!</b>"
+    
+    return f"{header}\n\n{progress_bar}{milestone}{streak}{reaction}"
+
+
+def generate_final_achievements(answer_stats: list[dict]) -> str:
+    """
+    Генерация итоговых достижений по результатам диагностики.
+    
+    Анализирует:
+    - Общее время прохождения
+    - Глубину ответов
+    - Стабильность (streak)
+    - Особые паттерны
+    """
+    if not answer_stats:
+        return "\n\n<i>Отлично справился! Готовлю твой результат...</i>"
+    
+    achievements: list[str] = []
+    
+    # Общее время
+    total_time = sum(s["duration_sec"] for s in answer_stats)
+    avg_time = total_time / len(answer_stats) if answer_stats else 0
+    
+    # Общая длина
+    total_length = sum(s["length"] for s in answer_stats)
+    avg_length = total_length / len(answer_stats) if answer_stats else 0
+    
+    # === TIME ACHIEVEMENTS ===
+    if total_time < 900:  # < 15 минут
+        achievements.append("⚡ <b>Скоростной режим</b> — менее 15 минут!")
+    elif total_time < 1800:  # < 30 минут
+        achievements.append("🚀 <b>Отличный темп</b> — уложился в 30 минут")
+    elif total_time > 3600:  # > 60 минут
+        achievements.append("🧘 <b>Глубокий мыслитель</b> — вдумчивый подход")
+    
+    # === LENGTH ACHIEVEMENTS ===
+    if avg_length > 400:
+        achievements.append("📚 <b>Эксперт</b> — очень детальные ответы")
+    elif avg_length > 250:
+        achievements.append("📝 <b>Аналитик</b> — хорошая глубина ответов")
+    elif avg_length < 100:
+        achievements.append("💨 <b>Лаконичность</b> — краткость — сестра таланта")
+    
+    # === STREAK ACHIEVEMENTS ===
+    long_answers = [s for s in answer_stats if s["length"] > 300]
+    if len(long_answers) >= 8:
+        achievements.append("🔥 <b>Серия эксперта</b> — 8+ глубоких ответов")
+    elif len(long_answers) >= 5:
+        achievements.append("✨ <b>Глубокий анализ</b> — 5+ развёрнутых ответов")
+    
+    # === CONSISTENCY ===
+    lengths = [s["length"] for s in answer_stats]
+    if lengths:
+        variance = sum((l - avg_length) ** 2 for l in lengths) / len(lengths)
+        std_dev = variance ** 0.5
+        if std_dev < 50:  # Очень стабильные ответы
+            achievements.append("🎯 <b>Стабильность</b> — ровное качество ответов")
+    
+    # === SPECIAL PATTERNS ===
+    # Разгон — последние ответы длиннее первых
+    if len(answer_stats) >= 5:
+        first_half = sum(s["length"] for s in answer_stats[:5]) / 5
+        second_half = sum(s["length"] for s in answer_stats[5:]) / max(1, len(answer_stats[5:]))
+        if second_half > first_half * 1.5:
+            achievements.append("📈 <b>Разгон</b> — раскрылся к концу!")
+    
+    if not achievements:
+        achievements.append("✅ <b>Диагностика пройдена</b>")
+    
+    # Лимитируем до 3 достижений
+    displayed = achievements[:3]
+    
+    return "\n\n" + "\n".join(displayed)
+
+
+def get_typing_hint(answer_length: int) -> str:
+    """
+    Генерация подсказки по длине ответа (показывается в preview).
+    
+    Помогает пользователю понять, достаточно ли развёрнутый ответ.
+    """
+    if answer_length < 50:
+        return "💡 <i>Совет: добавь деталей для более точного анализа</i>"
+    elif answer_length < 100:
+        return "📝 <i>Неплохо! Но чем больше деталей — тем точнее результат</i>"
+    elif answer_length < 200:
+        return "👍 <i>Хороший ответ!</i>"
+    elif answer_length < 400:
+        return "✨ <i>Отличный развёрнутый ответ!</i>"
+    elif answer_length < 700:
+        return "🔥 <i>Впечатляющая детализация!</i>"
+    else:
+        return "📚 <i>Вау, очень подробно! Это точно поможет анализу</i>"
+
+
+# Пул позитивных реакций (не оценочных!)
+POSITIVE_REACTIONS = [
+    "✨ Интересно!",
+    "💡 Записал!",
+    "📝 Принято!",
+    "🎯 Понял тебя!",
+    "👀 Любопытно!",
+    "💭 Интересный взгляд!",
+    "🧠 Зафиксировал!",
+    "📌 Отмечено!",
+    "🔍 Анализирую...",
+    "💫 Хорошо!",
+]
+
+# Реакции для длинных ответов
+DEEP_REACTIONS = [
+    "🔥 Глубоко!",
+    "📚 Очень детально!",
+    "💎 Богатый ответ!",
+    "🌟 Впечатляет!",
+    "🧩 Много инсайтов!",
+]
+
+
+def get_random_reaction(answer_length: int) -> str:
+    """
+    Генерация рандомной позитивной реакции.
+    
+    Не оценка! Просто acknowledgment что ответ получен.
+    """
+    if answer_length > 400:
+        # Для длинных ответов — специальные реакции
+        return random.choice(DEEP_REACTIONS)
+    else:
+        return random.choice(POSITIVE_REACTIONS)
 
 
 async def _send_reminder(bot: Bot, chat_id: int, question_num: int):
@@ -79,6 +282,8 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         current_question=1,
         conversation_history=[],
         analysis_history=[],
+        answer_stats=[],  # Статистика ответов для gamification
+        question_start_time=time.time(),  # Трекаем время на ответ
     )
     
     # Показываем "печатает..."
@@ -106,7 +311,8 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
     start_reminder(bot, callback.message.chat.id, 1)
 
 
-MIN_ANSWER_LENGTH = 20  # Минимальная длина ответа
+MIN_ANSWER_LENGTH = 50  # Минимальная длина ответа (для точной оценки)
+MAX_ANSWER_LENGTH = 4000  # Максимальная длина (TG лимит 4096, с запасом)
 
 
 @router.message(DiagnosticStates.answering)
@@ -190,9 +396,21 @@ async def capture_answer(message: Message, state: FSMContext):
     # Проверяем длину ответа
     if len(text_stripped) < MIN_ANSWER_LENGTH:
         await message.answer(
-            f"✏️ Ответ слишком короткий ({len(text_stripped)} символов).\n\n"
-            "Для точной диагностики нужны развёрнутые ответы.\n"
-            "Расскажи подробнее — хотя бы 2-3 предложения."
+            f"💡 <b>Ответ слишком короткий</b> ({len(text_stripped)}/{MIN_ANSWER_LENGTH} символов)\n\n"
+            "Для точной оценки нужны развёрнутые ответы.\n"
+            "Расскажи подробнее — <b>минимум 2-3 предложения</b>.\n\n"
+            "<i>Совет: опиши конкретную ситуацию, что делал, какой результат.</i>"
+        )
+        return
+    
+    # Проверяем максимальную длину (TG лимит)
+    if len(text_stripped) > MAX_ANSWER_LENGTH:
+        await message.answer(
+            f"📏 <b>Ответ слишком длинный!</b>\n\n"
+            f"Сейчас: {len(text_stripped)} символов\n"
+            f"Максимум: {MAX_ANSWER_LENGTH} символов\n\n"
+            "Попробуй сократить ответ — оставь самое важное.\n"
+            "<i>Совет: лучше глубина, чем объём!</i>"
         )
         return
     
@@ -203,11 +421,15 @@ async def capture_answer(message: Message, state: FSMContext):
     # Показываем preview с кнопками подтверждения
     preview_text = answer_text[:300] + "..." if len(answer_text) > 300 else answer_text
     
+    # Typing hint по длине ответа
+    typing_hint = get_typing_hint(len(answer_text))
+    
     await message.answer(
         f"📝 <b>Твой ответ:</b>\n\n"
         f"<i>{preview_text}</i>\n\n"
+        f"{typing_hint}\n"
         f"Отправить этот ответ?",
-        reply_markup=get_confirm_answer_keyboard(),
+        reply_markup=get_pause_keyboard(),
     )
     await state.set_state(DiagnosticStates.confirming_answer)
 
@@ -218,17 +440,32 @@ async def handle_new_answer_while_confirming(message: Message, state: FSMContext
     if not message.text:
         return
     
-    # Обновляем черновик
     answer_text = message.text.strip()
+    
+    # Проверяем максимальную длину
+    if len(answer_text) > MAX_ANSWER_LENGTH:
+        await message.answer(
+            f"📏 <b>Ответ слишком длинный!</b>\n\n"
+            f"Сейчас: {len(answer_text)} символов\n"
+            f"Максимум: {MAX_ANSWER_LENGTH} символов\n\n"
+            "Попробуй сократить ответ — оставь самое важное."
+        )
+        return
+    
+    # Обновляем черновик
     await state.update_data(draft_answer=answer_text)
     
     preview_text = answer_text[:300] + "..." if len(answer_text) > 300 else answer_text
     
+    # Typing hint по длине ответа
+    typing_hint = get_typing_hint(len(answer_text))
+    
     await message.answer(
         f"📝 <b>Обновлённый ответ:</b>\n\n"
         f"<i>{preview_text}</i>\n\n"
+        f"{typing_hint}\n"
         f"Отправить этот ответ?",
-        reply_markup=get_confirm_answer_keyboard(),
+        reply_markup=get_pause_keyboard(),
     )
 
 
@@ -247,6 +484,94 @@ async def edit_answer(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Введи новый ответ")
 
 
+@router.callback_query(F.data == "pause_session", DiagnosticStates.confirming_answer)
+async def pause_session(callback: CallbackQuery, state: FSMContext):
+    """Пауза диагностики — сохраняем и выходим."""
+    from src.db import get_session
+    from src.db.repositories import update_session_progress
+    
+    data = await state.get_data()
+    current = data.get("current_question", 1)
+    db_session_id = data.get("db_session_id")
+    conversation_history = data.get("conversation_history", [])
+    analysis_history = data.get("analysis_history", [])
+    
+    # Сохраняем прогресс в БД
+    if db_session_id:
+        try:
+            async with get_session() as db:
+                await update_session_progress(
+                    session=db,
+                    session_id=db_session_id,
+                    current_question=current,
+                    conversation_history=conversation_history,
+                    analysis_history=analysis_history,
+                )
+                logger.info(f"Session {db_session_id} paused at question {current}")
+        except Exception as e:
+            logger.error(f"Failed to save pause state: {e}")
+    
+    # Отменяем таймер напоминания
+    cancel_reminder(callback.message.chat.id)
+    
+    await callback.message.edit_text(
+        f"⏸️ <b>Диагностика на паузе</b>\n\n"
+        f"Прогресс: <b>{current - 1}/10</b> вопросов\n"
+        f"Сессия сохранена!\n\n"
+        f"Напиши /start когда будешь готов продолжить.\n"
+        f"<i>Сессия активна 24 часа.</i>",
+    )
+    
+    await state.set_state(DiagnosticStates.paused)
+    await callback.answer("⏸️ Сохранено!")
+
+
+@router.callback_query(F.data == "retry_analysis")
+async def retry_analysis(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Повторная попытка анализа после ошибки."""
+    data = await state.get_data()
+    
+    # Проверяем, есть ли сохранённый ответ
+    draft_answer = data.get("draft_answer")
+    if not draft_answer:
+        await callback.answer("❌ Ответ не найден. Начни заново.", show_alert=True)
+        return
+    
+    # Устанавливаем состояние и запускаем confirm_answer
+    await state.set_state(DiagnosticStates.confirming_answer)
+    
+    # Меняем callback_data и вызываем confirm_answer
+    callback.data = "confirm_answer"
+    await confirm_answer(callback, state, bot)
+
+
+@router.callback_query(F.data == "wait_more")
+async def wait_more(callback: CallbackQuery):
+    """Пользователь хочет подождать ещё."""
+    await callback.answer(
+        "⏳ Хорошо, подождём ещё немного...\n"
+        "Если через минуту не появится результат — нажми 🔄 Повторить",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data == "cancel_action")
+async def cancel_action(callback: CallbackQuery, state: FSMContext):
+    """Отмена текущего действия."""
+    data = await state.get_data()
+    current = data.get("current_question", 1)
+    question = data.get("current_question_text", "")
+    
+    await callback.message.edit_text(
+        f"❌ Действие отменено.\n\n"
+        f"<b>Вопрос {current}/10:</b>\n{question}\n\n"
+        f"Отправь свой ответ текстом или голосовым.",
+    )
+    
+    await state.set_state(DiagnosticStates.answering)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "confirm_answer", DiagnosticStates.confirming_answer)
 async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение ответа — запускаем анализ."""
@@ -255,6 +580,19 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     data = await state.get_data()
     current = data["current_question"]
     answer_text = data.get("draft_answer", "")
+    
+    # Трекинг времени ответа
+    question_start_time = data.get("question_start_time", time.time())
+    answer_duration = time.time() - question_start_time
+    
+    # Сохраняем статистику ответов
+    answer_stats = data.get("answer_stats", [])
+    answer_stats.append({
+        "question": current,
+        "duration_sec": answer_duration,
+        "length": len(answer_text),
+    })
+    await state.update_data(answer_stats=answer_stats)
     
     if not answer_text:
         await callback.answer("❌ Ответ не найден", show_alert=True)
@@ -289,11 +627,15 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # === ПРОГРЕСС-БАР ===
     async def update_progress():
         """Обновляет прогресс-бар во время AI запросов."""
+        # На последнем вопросе — другой текст (нет следующего вопроса)
+        is_last_question = current >= TOTAL_QUESTIONS
+        last_step_text = "Финализирую результат..." if is_last_question else "Генерирую вопрос..."
+        
         progress_states = [
             ("▓▓░░░░░░░░", "20%", "Анализирую глубину..."),
             ("▓▓▓▓░░░░░░", "40%", "Оцениваю структуру..."),
             ("▓▓▓▓▓▓░░░░", "60%", "Выявляю инсайты..."),
-            ("▓▓▓▓▓▓▓▓░░", "80%", "Генерирую вопрос..."),
+            ("▓▓▓▓▓▓▓▓░░", "80%", last_step_text),
         ]
         chat_id = callback.message.chat.id
         try:
@@ -395,8 +737,15 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # Уведомляем пользователя о проблемах с AI (если были)
     if ai_had_issues:
         try:
+            from src.utils.error_recovery import get_error_message, ErrorType
+            from src.bot.keyboards.inline import get_error_retry_keyboard
+            
+            # Показываем информативное сообщение
             await callback.message.answer(
-                "⚠️ <i>AI-сервис временно перегружен. Диагностика продолжается в упрощённом режиме.</i>",
+                "⚠️ <b>AI работает в упрощённом режиме</b>\n\n"
+                "<i>Сервис временно перегружен, но диагностика продолжается.\n"
+                "Результаты могут быть менее точными.</i>\n\n"
+                "💡 Если хочешь получить полный анализ — попробуй позже.",
             )
         except Exception:
             pass
@@ -426,6 +775,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             current_question_text=next_question,
             conversation_history=conversation_history,
             analysis_history=analysis_history,
+            question_start_time=time.time(),  # Трекаем время для следующего вопроса
         )
         
         # Сохраняем прогресс в БД
@@ -442,7 +792,20 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             except Exception as e:
                 logger.error(f"Failed to update progress: {e}")
         
-        await thinking_msg.edit_text(
+        # === PROGRESS & GAMIFICATION ===
+        progress_msg = generate_progress_message(
+            current_question=current,
+            total_questions=TOTAL_QUESTIONS,
+            answer_stats=data.get("answer_stats", []),
+            answer_text=answer_text,
+        )
+        
+        # Показываем прогресс
+        await thinking_msg.edit_text(progress_msg)
+        await asyncio.sleep(1.5)  # Даём время прочитать
+        
+        # Показываем следующий вопрос
+        await callback.message.answer(
             f"<b>Вопрос {next_question_num}/{TOTAL_QUESTIONS}</b>\n\n{next_question}",
         )
         await state.set_state(DiagnosticStates.answering)
@@ -454,13 +817,28 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         cancel_reminder(callback.message.chat.id)  # Отменяем таймер
         from aiogram.enums import ChatAction
         
+        # Устанавливаем state generating_report для защиты от race condition
+        await state.set_state(DiagnosticStates.generating_report)
+        
         await state.update_data(
             conversation_history=conversation_history,
             analysis_history=analysis_history,
         )
-        await state.set_state(DiagnosticStates.finished)
         
+        # === ФИНАЛЬНЫЕ ACHIEVEMENTS ===
+        final_stats = data.get("answer_stats", [])
+        achievements = generate_final_achievements(final_stats)
+        
+        # Показываем итоговый прогресс и достижения
         await thinking_msg.edit_text(
+            "🎉 <b>Диагностика завершена!</b>\n\n"
+            "<code>██████████</code> 100%\n"
+            f"{achievements}"
+        )
+        await asyncio.sleep(2)  # Даём прочитать достижения
+        
+        # Теперь генерируем отчёт
+        report_msg = await callback.message.answer(
             "📊 <b>Генерирую детальный AI-отчёт...</b>\n\n"
             "<code>▓░░░░░░░░░</code> 10%\n\n"
             "<i>Анализирую все 10 ответов...</i>"
@@ -479,7 +857,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                     await asyncio.sleep(5)
                     await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
                     try:
-                        await thinking_msg.edit_text(
+                        await report_msg.edit_text(
                             f"📊 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
                         )
                     except Exception:
@@ -511,12 +889,42 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         except asyncio.CancelledError:
             pass
         
+        # Удаляем сообщение с прогресс-баром отчёта
+        try:
+            await report_msg.delete()
+        except Exception:
+            pass  # Сообщение уже удалено или недоступно
+        
         # Рассчитываем баллы и калибруем по опыту
         raw_scores = calculate_category_scores(analysis_history)
         scores = calibrate_scores(raw_scores, data.get("experience", "middle"))
-        header = generate_score_header(data, scores)
+        
+        # Строим профиль компетенций
+        profile = build_profile(
+            role=data["role"],
+            role_name=data["role_name"],
+            experience=data.get("experience", "middle"),
+            experience_name=data.get("experience_name", ""),
+            scores=scores,
+            analysis_history=analysis_history,
+        )
+        profile_text = format_profile_text(profile)
+        
+        # Строим PDP
+        raw_averages = scores.get("raw_averages", {})
+        pdp = build_pdp(
+            role=data["role"],
+            role_name=data["role_name"],
+            experience=data.get("experience", "middle"),
+            experience_name=data.get("experience_name", ""),
+            total_score=scores["total"],
+            raw_averages=raw_averages,
+            strengths=profile.strengths,
+        )
+        pdp_text = format_pdp_text(pdp)
         
         # Сохраняем результат в БД
+        header = generate_score_header(data, scores)
         full_report = header + "\n\n" + report
         if db_session_id:
             try:
@@ -533,68 +941,127 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             except Exception as e:
                 logger.error(f"Failed to complete session: {e}")
         
-        # Выбираем клавиатуру (с PDF если есть session_id)
+        # === СОХРАНЯЕМ ВСЕ ДАННЫЕ В STATE ДЛЯ ЛЕНИВОЙ ЗАГРУЗКИ ===
+        await state.update_data(
+            result_report=report,
+            result_profile=profile_text,
+            result_pdp=pdp_text,
+            result_scores=scores,
+            result_header=header,
+        )
+        await state.set_state(DiagnosticStates.finished)
+        
+        # === ОТПРАВЛЯЕМ ТОЛЬКО SUMMARY CARD ===
+        summary_card = generate_summary_card(data, scores, profile)
+        
+        # Выбираем клавиатуру
         if db_session_id:
-            keyboard = get_report_keyboard(db_session_id)
+            keyboard = get_result_summary_keyboard(db_session_id)
         else:
             keyboard = get_restart_keyboard()
         
-        # === ОТПРАВКА ОТЧЁТА БЛОКАМИ С ПАУЗАМИ ===
+        await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
         
-        # 1️⃣ Шапка с баллами (редактируем thinking_msg)
-        await thinking_msg.edit_text(header)
-        
-        # 2️⃣ Разбиваем AI-отчёт на блоки
-        report_blocks = split_report_into_blocks(report)
-        
-        # Если блоков мало — fallback на простую отправку
-        if len(report_blocks) <= 1:
-            await asyncio.sleep(1)
-            try:
-                await callback.message.answer(sanitize_html(report))
-            except Exception as e:
-                logger.warning(f"Report HTML error: {e}")
-                await callback.message.answer(report, parse_mode=None)
-        else:
-            # Отправляем блоки с паузами
-            for i, block in enumerate(report_blocks):
-                await asyncio.sleep(1)  # Пауза между блоками
-                await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
-                
-                # Форматируем блок и санитизируем HTML
-                block_text = f"{block['emoji']} <b>{block['title']}</b>\n\n{block['content']}"
-                block_text = sanitize_html(block_text)
-                
-                # Разбиваем если слишком длинный
-                block_parts = split_message(block_text, max_length=3500)
-                for part in block_parts:
-                    try:
-                        await callback.message.answer(part)
-                    except Exception as e:
-                        # Если HTML всё ещё сломан — отправляем plain text
-                        logger.warning(f"HTML parse error, sending as plain: {e}")
-                        plain_text = part.replace('<b>', '').replace('</b>', '')
-                        plain_text = plain_text.replace('<i>', '').replace('</i>', '')
-                        await callback.message.answer(plain_text, parse_mode=None)
-        
-        await asyncio.sleep(0.5)
-        
-        # 3️⃣ Показываем кнопки PDF/рестарт
-        await callback.message.answer(
-            "✅ <b>Диагностика завершена!</b>\n\n"
-            "Сохрани результаты или пройди ещё раз:",
-            reply_markup=keyboard,
+        # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
+        asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
+
+
+# === ХРАНИЛИЩЕ ТАЙМЕРОВ FEEDBACK ===
+_feedback_tasks: dict[int, asyncio.Task] = {}
+
+
+async def _send_delayed_feedback(bot: Bot, chat_id: int, session_id: int | None):
+    """Отправляет запрос feedback через 3 минуты."""
+    try:
+        await asyncio.sleep(180)  # 3 минуты
+        await bot.send_message(
+            chat_id,
+            "💭 <b>Как тебе диагностика?</b>\n\n"
+            "Твой отзыв поможет сделать её лучше!",
+            reply_markup=get_delayed_feedback_keyboard(),
         )
-        
-        # 4️⃣ Запрашиваем feedback
-        await asyncio.sleep(1)
-        await callback.message.answer(
-            "📊 <b>Оцени качество диагностики</b>\n\n"
-            "Насколько полезным был этот опыт?\n"
-            "Выбери от 1 (плохо) до 10 (отлично):",
-            reply_markup=get_feedback_rating_keyboard(),
-        )
-        await state.set_state(DiagnosticStates.feedback_rating)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.debug(f"Delayed feedback failed: {e}")
+
+
+def generate_summary_card(data: dict, scores: dict, profile) -> str:
+    """
+    Генерация красивой Summary Card — один экран с ключевым результатом.
+    
+    Не спамим 6 сообщений, а показываем главное:
+    - Общий балл и уровень
+    - Топ-3 сильных стороны (кратко)
+    - Топ-3 зоны роста (кратко)
+    - Призыв к действию
+    """
+    total = scores["total"]
+    
+    # Уровень с эмодзи
+    if total >= 80:
+        level = "🏆 Senior / Lead"
+        level_comment = "Впечатляющий результат!"
+    elif total >= 60:
+        level = "💪 Middle+"
+        level_comment = "Отличный уровень!"
+    elif total >= 40:
+        level = "📈 Middle"
+        level_comment = "Хорошая база для роста!"
+    elif total >= 25:
+        level = "🌱 Junior+"
+        level_comment = "Есть потенциал!"
+    else:
+        level = "🌱 Junior"
+        level_comment = "Начало пути!"
+    
+    # Прогресс-бар
+    filled = int(total / 4)  # 25 символов для 100 баллов
+    bar = "█" * filled + "░" * (25 - filled)
+    
+    # Сильные стороны (кратко)
+    strengths = [METRIC_NAMES_RU.get(s, s) for s in profile.strengths[:3]]
+    strengths_text = " • ".join(strengths) if strengths else "—"
+    
+    # Зоны роста (кратко)
+    growth = [METRIC_NAMES_RU.get(g, g) for g in profile.growth_areas[:3]]
+    growth_text = " • ".join(growth) if growth else "—"
+    
+    # Баллы по категориям
+    hs = scores.get("hard_skills", 0)
+    ss = scores.get("soft_skills", 0)
+    th = scores.get("thinking", 0)
+    ms = scores.get("mindset", 0)
+    
+    return f"""🎯 <b>ДИАГНОСТИКА ЗАВЕРШЕНА</b>
+
+<b>{data['role_name']}</b> • {data['experience_name']}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>📊 ОБЩИЙ БАЛЛ: {total}/100</b>
+<code>{bar}</code>
+{level} — {level_comment}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>По категориям:</b>
+🔧 Hard Skills: {hs}/30
+🗣 Soft Skills: {ss}/25
+🧠 Thinking: {th}/25
+💡 Mindset: {ms}/20
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>💪 Сильные стороны:</b>
+{strengths_text}
+
+<b>📈 Фокус на развитие:</b>
+{growth_text}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<i>Выбери, что хочешь изучить подробнее:</i>"""
 
 
 def generate_score_header(data: dict, scores: dict) -> str:
@@ -708,6 +1175,24 @@ async def generate_basic_report(
 <i>Детальный AI-анализ временно недоступен.</i>"""
 
 
+# ==================== GENERATING REPORT PROTECTION ====================
+
+@router.message(DiagnosticStates.generating_report)
+async def ignore_during_report_generation(message: Message, state: FSMContext):
+    """Игнорируем сообщения во время генерации отчёта (защита от race condition)."""
+    await message.answer(
+        "⏳ <b>Подожди немного!</b>\n\n"
+        "Сейчас генерируется твой персональный отчёт.\n"
+        "<i>Это займёт ещё 30-60 секунд...</i>"
+    )
+
+
+@router.callback_query(DiagnosticStates.generating_report)
+async def ignore_callbacks_during_report(callback: CallbackQuery):
+    """Игнорируем callback'и во время генерации отчёта."""
+    await callback.answer("⏳ Отчёт генерируется, подожди...", show_alert=False)
+
+
 # ==================== FEEDBACK HANDLERS ====================
 
 @router.callback_query(F.data.startswith("feedback:"), DiagnosticStates.feedback_rating)
@@ -763,10 +1248,11 @@ async def process_feedback_comment(message: Message, state: FSMContext):
         except Exception as e:
             logger.error(f"Failed to save feedback: {e}")
     
+    from src.bot.keyboards.inline import get_back_to_menu_keyboard
     await message.answer(
         "✅ <b>Спасибо за обратную связь!</b>\n\n"
-        "Твой отзыв поможет улучшить диагностику 💪\n\n"
-        "Хочешь пройти ещё раз? Нажми /start",
+        "Твой отзыв поможет улучшить диагностику 💪",
+        reply_markup=get_back_to_menu_keyboard(),
     )
     await state.set_state(DiagnosticStates.finished)
 
@@ -792,10 +1278,282 @@ async def skip_feedback_comment(callback: CallbackQuery, state: FSMContext):
         except Exception as e:
             logger.error(f"Failed to save feedback: {e}")
     
+    from src.bot.keyboards.inline import get_back_to_menu_keyboard
     await callback.message.edit_text(
         "✅ <b>Спасибо за оценку!</b>\n\n"
-        "Твой отзыв поможет улучшить диагностику 💪\n\n"
-        "Хочешь пройти ещё раз? Нажми /start",
+        "Твой отзыв поможет улучшить диагностику 💪",
+        reply_markup=get_back_to_menu_keyboard(),
     )
     await state.set_state(DiagnosticStates.finished)
     await callback.answer()
+
+
+# ==================== STRUCTURED REPORT HANDLERS ====================
+
+@router.callback_query(F.data.startswith("show:report:"))
+async def show_detailed_report(callback: CallbackQuery, state: FSMContext):
+    """Показать детальный AI-анализ — ОДНО сообщение."""
+    session_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    
+    report = data.get("result_report")
+    header = data.get("result_header", "")
+    
+    if not report:
+        await callback.answer("⚠️ Отчёт недоступен", show_alert=True)
+        return
+    
+    await callback.answer("📊 Загружаю...")
+    
+    # Объединяем header + report, но ограничиваем длину
+    full_text = f"{header}\n\n{report}" if header else report
+    
+    # Если текст слишком длинный — показываем краткую версию
+    if len(full_text) > 3800:
+        # Берём первые ~3500 символов и добавляем примечание
+        short_text = full_text[:3500]
+        # Обрезаем до последнего полного предложения
+        last_dot = max(short_text.rfind('.'), short_text.rfind('!'), short_text.rfind('\n\n'))
+        if last_dot > 2000:
+            short_text = short_text[:last_dot + 1]
+        
+        short_text += "\n\n<i>📄 Полный отчёт доступен в PDF</i>"
+        full_text = short_text
+    
+    try:
+        await callback.message.answer(
+            sanitize_html(full_text),
+            reply_markup=get_back_to_summary_keyboard(session_id),
+        )
+    except Exception as e:
+        logger.warning(f"Report HTML error: {e}")
+        await callback.message.answer(
+            full_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', ''),
+            parse_mode=None,
+            reply_markup=get_back_to_summary_keyboard(session_id),
+        )
+
+
+@router.callback_query(F.data.startswith("show:profile:"))
+async def show_profile(callback: CallbackQuery, state: FSMContext):
+    """Показать профиль компетенций — ОДНО сообщение."""
+    session_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    
+    profile_text = data.get("result_profile")
+    
+    if not profile_text:
+        await callback.answer("⚠️ Профиль недоступен", show_alert=True)
+        return
+    
+    await callback.answer("🎯 Загружаю...")
+    
+    # Ограничиваем длину
+    if len(profile_text) > 3800:
+        profile_text = profile_text[:3500]
+        last_newline = profile_text.rfind('\n\n')
+        if last_newline > 2000:
+            profile_text = profile_text[:last_newline]
+        profile_text += "\n\n<i>📄 Полный профиль в PDF</i>"
+    
+    try:
+        await callback.message.answer(
+            profile_text,
+            reply_markup=get_back_to_summary_keyboard(session_id),
+        )
+    except Exception as e:
+        logger.warning(f"Profile HTML error: {e}")
+        await callback.message.answer(
+            profile_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', ''),
+            parse_mode=None,
+            reply_markup=get_back_to_summary_keyboard(session_id),
+        )
+
+
+@router.callback_query(F.data.startswith("show:pdp:"))
+async def show_pdp(callback: CallbackQuery, state: FSMContext):
+    """Показать план развития — ОДНО сообщение."""
+    session_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    
+    pdp_text = data.get("result_pdp")
+    
+    if not pdp_text:
+        await callback.answer("⚠️ План недоступен", show_alert=True)
+        return
+    
+    await callback.answer("📈 Загружаю...")
+    
+    # Ограничиваем длину
+    if len(pdp_text) > 3800:
+        pdp_text = pdp_text[:3500]
+        last_newline = pdp_text.rfind('\n\n')
+        if last_newline > 2000:
+            pdp_text = pdp_text[:last_newline]
+        pdp_text += "\n\n<i>📄 Полный план в PDF</i>"
+    
+    try:
+        await callback.message.answer(
+            pdp_text,
+            reply_markup=get_back_to_summary_keyboard(session_id),
+        )
+    except Exception as e:
+        logger.warning(f"PDP HTML error: {e}")
+        await callback.message.answer(
+            pdp_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', ''),
+            parse_mode=None,
+            reply_markup=get_back_to_summary_keyboard(session_id),
+        )
+
+
+@router.callback_query(F.data.startswith("show:summary:"))
+async def show_summary(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к summary card."""
+    session_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    
+    scores = data.get("result_scores")
+    
+    if not scores:
+        await callback.answer("⚠️ Результаты недоступны. Попробуй /start", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    # Генерируем summary заново (т.к. profile в state нет как объект)
+    # Используем сохранённые данные
+    profile_text = data.get("result_profile", "")
+    
+    # Извлекаем strengths/growth из scores (raw_averages)
+    raw_avg = scores.get("raw_averages", {})
+    sorted_metrics = sorted(
+        [(k, v) for k, v in raw_avg.items()],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    strengths = [METRIC_NAMES_RU.get(m[0], m[0]) for m in sorted_metrics[:3]]
+    growth = [METRIC_NAMES_RU.get(m[0], m[0]) for m in sorted_metrics[-3:]]
+    
+    total = scores["total"]
+    
+    if total >= 80:
+        level = "🏆 Senior / Lead"
+        level_comment = "Впечатляющий результат!"
+    elif total >= 60:
+        level = "💪 Middle+"
+        level_comment = "Отличный уровень!"
+    elif total >= 40:
+        level = "📈 Middle"
+        level_comment = "Хорошая база для роста!"
+    elif total >= 25:
+        level = "🌱 Junior+"
+        level_comment = "Есть потенциал!"
+    else:
+        level = "🌱 Junior"
+        level_comment = "Начало пути!"
+    
+    filled = int(total / 4)
+    bar = "█" * filled + "░" * (25 - filled)
+    
+    hs = scores.get("hard_skills", 0)
+    ss = scores.get("soft_skills", 0)
+    th = scores.get("thinking", 0)
+    ms = scores.get("mindset", 0)
+    
+    summary_card = f"""🎯 <b>РЕЗУЛЬТАТЫ ДИАГНОСТИКИ</b>
+
+<b>{data.get('role_name', 'Специалист')}</b> • {data.get('experience_name', '')}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>📊 ОБЩИЙ БАЛЛ: {total}/100</b>
+<code>{bar}</code>
+{level} — {level_comment}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>По категориям:</b>
+🔧 Hard Skills: {hs}/30
+🗣 Soft Skills: {ss}/25
+🧠 Thinking: {th}/25
+💡 Mindset: {ms}/20
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>💪 Сильные стороны:</b>
+{" • ".join(strengths)}
+
+<b>📈 Фокус на развитие:</b>
+{" • ".join(growth)}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<i>Выбери, что хочешь изучить подробнее:</i>"""
+    
+    await callback.message.answer(
+        summary_card,
+        reply_markup=get_result_summary_keyboard(session_id),
+    )
+
+
+# ==================== QUICK FEEDBACK HANDLERS ====================
+
+@router.callback_query(F.data.startswith("quick_feedback:"))
+async def process_quick_feedback(callback: CallbackQuery, state: FSMContext):
+    """Обработка быстрого feedback (👍/👎/подробнее)."""
+    feedback_type = callback.data.split(":")[1]
+    data = await state.get_data()
+    db_session_id = data.get("db_session_id")
+    
+    if feedback_type == "good":
+        # Сохраняем положительный отзыв
+        if db_session_id:
+            try:
+                async with get_session() as db:
+                    await save_feedback(
+                        session=db,
+                        session_id=db_session_id,
+                        rating=8,  # 👍 = 8/10
+                        comment="quick_feedback: good",
+                    )
+            except Exception as e:
+                logger.error(f"Failed to save quick feedback: {e}")
+        
+        await callback.message.edit_text(
+            "👍 <b>Спасибо!</b>\n\n"
+            "Рады, что диагностика была полезной! 🙌",
+        )
+        await callback.answer("Спасибо! 💪")
+        
+    elif feedback_type == "bad":
+        # Сохраняем отрицательный отзыв
+        if db_session_id:
+            try:
+                async with get_session() as db:
+                    await save_feedback(
+                        session=db,
+                        session_id=db_session_id,
+                        rating=3,  # 👎 = 3/10
+                        comment="quick_feedback: bad",
+                    )
+            except Exception as e:
+                logger.error(f"Failed to save quick feedback: {e}")
+        
+        await callback.message.edit_text(
+            "👎 <b>Спасибо за честность!</b>\n\n"
+            "Расскажи, что можно улучшить?\n"
+            "<i>Просто напиши сообщение:</i>",
+        )
+        await state.set_state(DiagnosticStates.feedback_comment)
+        await callback.answer()
+        
+    elif feedback_type == "detailed":
+        # Переход к детальному feedback
+        await callback.message.edit_text(
+            "📊 <b>Оцени качество диагностики</b>\n\n"
+            "Насколько полезным был этот опыт?\n"
+            "Выбери от 1 (плохо) до 10 (отлично):",
+            reply_markup=get_feedback_rating_keyboard(),
+        )
+        await state.set_state(DiagnosticStates.feedback_rating)
+        await callback.answer()

@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: diagnostic-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./debug_logs:/app/debug_logs
+    environment:
+      - TZ=Europe/Moscow
+

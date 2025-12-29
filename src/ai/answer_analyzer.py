@@ -63,11 +63,16 @@ def robust_json_parse(text: str) -> dict:
     
     # Стратегия 1: Убираем markdown code blocks
     if "```" in text:
-        # Ищем ```json или просто ```
         import re
-        code_block_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', text)
+        # Ищем ```json ... ``` (жадный поиск до последнего ```)
+        code_block_match = re.search(r'```(?:json)?\s*\n([\s\S]+?)\n```', text)
         if code_block_match:
             text = code_block_match.group(1).strip()
+        else:
+            # Попробуем без переноса строки
+            code_block_match = re.search(r'```(?:json)?\s*([\s\S]+?)```', text)
+            if code_block_match:
+                text = code_block_match.group(1).strip()
     
     # Стратегия 2: Прямой парсинг (если уже чистый JSON)
     try:

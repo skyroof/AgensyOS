@@ -33,8 +33,10 @@ class ErrorHandlerMiddleware(BaseMiddleware):
                 elif isinstance(event, CallbackQuery):
                     await event.answer("❌ Ошибка. Попробуй ещё раз.", show_alert=True)
                     if event.message:
+                        from src.bot.keyboards.inline import get_back_to_menu_keyboard
                         await event.message.answer(
-                            "❌ Произошла ошибка. Нажми /start для перезапуска."
+                            "❌ Произошла ошибка.",
+                            reply_markup=get_back_to_menu_keyboard(),
                         )
             except Exception:
                 pass

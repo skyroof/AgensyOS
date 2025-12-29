@@ -17,11 +17,20 @@ class DiagnosticStates(StatesGroup):
     # Подтверждение старта
     ready_to_start = State()
     
+    # Восстановление незавершённой сессии
+    session_recovery = State()
+    
     # Процесс диагностики (10 вопросов)
     answering = State()
     
     # Подтверждение ответа перед отправкой
     confirming_answer = State()
+    
+    # Генерация отчёта (защита от race condition)
+    generating_report = State()
+    
+    # Пауза сессии
+    paused = State()
     
     # Сбор feedback
     feedback_rating = State()

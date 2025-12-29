@@ -1,50 +1,447 @@
 """
-Генератор PDF-отчётов.
+Генератор красивых PDF-отчётов с визуализациями.
+
+Включает:
+- Radar chart компетенций (12 метрик)
+- Цветные progress bars
+- Стильный современный дизайн
+- Визуальное сравнение с бенчмарком
 """
 import io
 import logging
+import math
 from datetime import datetime
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    PageBreak, KeepTogether, Flowable, Image
+)
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.graphics.shapes import Drawing, Polygon, Circle, Line, String, Rect
+from reportlab.graphics.charts.piecharts import Pie
+from reportlab.graphics import renderPDF
 
 logger = logging.getLogger(__name__)
 
-# Регистрируем шрифт с поддержкой кириллицы
-# Используем встроенный Helvetica для ASCII, для кириллицы нужен DejaVu или другой
+# ========================================
+# ЦВЕТОВАЯ ПАЛИТРА
+# ========================================
+
+class Colors:
+    """Цветовая схема отчёта."""
+    # Основные
+    PRIMARY = colors.HexColor('#1a1a2e')      # Тёмно-синий
+    SECONDARY = colors.HexColor('#16213e')    # Тёмный
+    ACCENT = colors.HexColor('#0f3460')       # Акцент
+    HIGHLIGHT = colors.HexColor('#e94560')    # Яркий акцент (красный)
+    
+    # Уровни
+    EXCELLENT = colors.HexColor('#27ae60')    # Зелёный
+    GOOD = colors.HexColor('#2980b9')         # Синий
+    AVERAGE = colors.HexColor('#f39c12')      # Оранжевый
+    LOW = colors.HexColor('#e74c3c')          # Красный
+    
+    # Категории
+    HARD_SKILLS = colors.HexColor('#3498db')  # Синий
+    SOFT_SKILLS = colors.HexColor('#9b59b6')  # Фиолетовый
+    THINKING = colors.HexColor('#1abc9c')     # Бирюзовый
+    MINDSET = colors.HexColor('#e67e22')      # Оранжевый
+    
+    # Фоны
+    LIGHT_BG = colors.HexColor('#f8f9fa')
+    CARD_BG = colors.HexColor('#ffffff')
+    BORDER = colors.HexColor('#dee2e6')
+    
+    # Текст
+    TEXT_PRIMARY = colors.HexColor('#212529')
+    TEXT_SECONDARY = colors.HexColor('#6c757d')
+    TEXT_MUTED = colors.HexColor('#adb5bd')
+
+
+# ========================================
+# РЕГИСТРАЦИЯ ШРИФТОВ
+# ========================================
+
 try:
-    # Попробуем найти системный шрифт
     import os
     
-    # Windows fonts
-    font_paths = [
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/calibri.ttf",
-        "C:/Windows/Fonts/tahoma.ttf",
-    ]
+    # Пробуем найти системные шрифты
+    font_paths = {
+        "regular": [
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/calibri.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+        ],
+        "bold": [
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/calibrib.ttf",
+            "C:/Windows/Fonts/segoeuib.ttf",
+        ],
+    }
     
-    font_registered = False
-    for font_path in font_paths:
+    FONT_NAME = 'Helvetica'
+    FONT_BOLD = 'Helvetica-Bold'
+    
+    for font_path in font_paths["regular"]:
         if os.path.exists(font_path):
             pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-            font_registered = True
+            FONT_NAME = 'CustomFont'
             break
     
-    if not font_registered:
-        # Fallback - используем стандартный шрифт
-        logger.warning("No Cyrillic font found, PDF may have issues with Russian text")
-        FONT_NAME = 'Helvetica'
-    else:
-        FONT_NAME = 'CustomFont'
-        
+    for font_path in font_paths["bold"]:
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('CustomFontBold', font_path))
+            FONT_BOLD = 'CustomFontBold'
+            break
+            
 except Exception as e:
-    logger.warning(f"Failed to register font: {e}")
+    logger.warning(f"Failed to register fonts: {e}")
     FONT_NAME = 'Helvetica'
+    FONT_BOLD = 'Helvetica-Bold'
 
+
+# ========================================
+# КАСТОМНЫЕ FLOWABLES (КОМПОНЕНТЫ)
+# ========================================
+
+class RadarChart(Flowable):
+    """Radar chart для 12 компетенций."""
+    
+    def __init__(self, metrics: dict[str, float], width: float = 180, height: float = 180):
+        Flowable.__init__(self)
+        self.metrics = metrics
+        self.width = width
+        self.height = height
+        self.center_x = width / 2
+        self.center_y = height / 2
+        self.radius = min(width, height) / 2 - 25
+    
+    def draw(self):
+        canvas = self.canv
+        
+        # Метрики в порядке отображения
+        metric_order = [
+            ("expertise", "Экспертиза"),
+            ("methodology", "Методология"),
+            ("tools_proficiency", "Инструменты"),
+            ("articulation", "Коммуникация"),
+            ("self_awareness", "Самосознание"),
+            ("conflict_handling", "Конфликты"),
+            ("depth", "Глубина"),
+            ("structure", "Структура"),
+            ("systems_thinking", "Системность"),
+            ("creativity", "Креативность"),
+            ("honesty", "Честность"),
+            ("growth_orientation", "Рост"),
+        ]
+        
+        n_metrics = len(metric_order)
+        angle_step = 2 * math.pi / n_metrics
+        
+        # Рисуем сетку (круги)
+        for level in [2.5, 5, 7.5, 10]:
+            r = self.radius * (level / 10)
+            canvas.setStrokeColor(Colors.BORDER)
+            canvas.setLineWidth(0.5)
+            canvas.circle(self.center_x, self.center_y, r, stroke=1, fill=0)
+        
+        # Рисуем лучи и подписи
+        canvas.setFont(FONT_NAME, 6)
+        for i, (metric_key, metric_name) in enumerate(metric_order):
+            angle = -math.pi / 2 + i * angle_step  # Начинаем сверху
+            
+            # Луч
+            x_end = self.center_x + self.radius * math.cos(angle)
+            y_end = self.center_y + self.radius * math.sin(angle)
+            canvas.setStrokeColor(Colors.BORDER)
+            canvas.setLineWidth(0.3)
+            canvas.line(self.center_x, self.center_y, x_end, y_end)
+            
+            # Подпись
+            label_r = self.radius + 12
+            x_label = self.center_x + label_r * math.cos(angle)
+            y_label = self.center_y + label_r * math.sin(angle)
+            
+            canvas.setFillColor(Colors.TEXT_SECONDARY)
+            
+            # Выравнивание подписей
+            if abs(math.cos(angle)) < 0.1:  # Сверху/снизу
+                canvas.drawCentredString(x_label, y_label - 2, metric_name)
+            elif math.cos(angle) > 0:  # Справа
+                canvas.drawString(x_label, y_label - 2, metric_name)
+            else:  # Слева
+                canvas.drawRightString(x_label, y_label - 2, metric_name)
+        
+        # Рисуем полигон значений
+        points = []
+        for i, (metric_key, _) in enumerate(metric_order):
+            value = self.metrics.get(metric_key, 5)
+            angle = -math.pi / 2 + i * angle_step
+            r = self.radius * (value / 10)
+            x = self.center_x + r * math.cos(angle)
+            y = self.center_y + r * math.sin(angle)
+            points.append((x, y))
+        
+        # Заливка полигона
+        path = canvas.beginPath()
+        path.moveTo(points[0][0], points[0][1])
+        for x, y in points[1:]:
+            path.lineTo(x, y)
+        path.close()
+        
+        canvas.setFillColor(colors.Color(0.23, 0.65, 0.98, alpha=0.3))
+        canvas.setStrokeColor(Colors.HARD_SKILLS)
+        canvas.setLineWidth(2)
+        canvas.drawPath(path, stroke=1, fill=1)
+        
+        # Точки на вершинах
+        for x, y in points:
+            canvas.setFillColor(Colors.HARD_SKILLS)
+            canvas.circle(x, y, 3, stroke=0, fill=1)
+
+
+class ProgressBar(Flowable):
+    """Цветной progress bar."""
+    
+    def __init__(
+        self, 
+        value: float, 
+        max_value: float, 
+        width: float = 120, 
+        height: float = 12,
+        color: colors.Color = None,
+        show_value: bool = True,
+        label: str = "",
+    ):
+        Flowable.__init__(self)
+        self.value = value
+        self.max_value = max_value
+        self.width = width
+        self.height = height
+        self.show_value = show_value
+        self.label = label
+        
+        # Автоцвет по значению
+        if color:
+            self.color = color
+        else:
+            pct = value / max_value if max_value > 0 else 0
+            if pct >= 0.8:
+                self.color = Colors.EXCELLENT
+            elif pct >= 0.6:
+                self.color = Colors.GOOD
+            elif pct >= 0.4:
+                self.color = Colors.AVERAGE
+            else:
+                self.color = Colors.LOW
+    
+    def draw(self):
+        canvas = self.canv
+        
+        label_width = 0
+        if self.label:
+            canvas.setFont(FONT_NAME, 8)
+            canvas.setFillColor(Colors.TEXT_SECONDARY)
+            canvas.drawString(0, self.height / 2 - 3, self.label)
+            label_width = 80
+        
+        bar_x = label_width
+        bar_width = self.width - label_width - (25 if self.show_value else 0)
+        
+        # Фон
+        canvas.setFillColor(Colors.LIGHT_BG)
+        canvas.roundRect(bar_x, 0, bar_width, self.height, 3, stroke=0, fill=1)
+        
+        # Заполненная часть
+        fill_width = bar_width * (self.value / self.max_value) if self.max_value > 0 else 0
+        if fill_width > 0:
+            canvas.setFillColor(self.color)
+            canvas.roundRect(bar_x, 0, fill_width, self.height, 3, stroke=0, fill=1)
+        
+        # Значение
+        if self.show_value:
+            canvas.setFont(FONT_BOLD, 9)
+            canvas.setFillColor(Colors.TEXT_PRIMARY)
+            canvas.drawString(bar_x + bar_width + 5, self.height / 2 - 3, f"{self.value:.1f}")
+
+
+class ScoreCard(Flowable):
+    """Карточка с баллом."""
+    
+    def __init__(
+        self, 
+        title: str, 
+        score: int, 
+        max_score: int,
+        color: colors.Color,
+        width: float = 40,
+        height: float = 50,
+    ):
+        Flowable.__init__(self)
+        self.title = title
+        self.score = score
+        self.max_score = max_score
+        self.color = color
+        self.width = width
+        self.height = height
+    
+    def draw(self):
+        canvas = self.canv
+        
+        # Фон карточки
+        canvas.setFillColor(self.color)
+        canvas.roundRect(0, 0, self.width, self.height, 4, stroke=0, fill=1)
+        
+        # Балл
+        canvas.setFillColor(colors.white)
+        canvas.setFont(FONT_BOLD, 16)
+        canvas.drawCentredString(self.width / 2, self.height - 22, str(self.score))
+        
+        # Максимум
+        canvas.setFont(FONT_NAME, 8)
+        canvas.drawCentredString(self.width / 2, self.height - 32, f"/ {self.max_score}")
+        
+        # Название
+        canvas.setFont(FONT_NAME, 6)
+        # Разбиваем на 2 строки если нужно
+        words = self.title.split()
+        if len(words) > 1:
+            canvas.drawCentredString(self.width / 2, 12, words[0])
+            canvas.drawCentredString(self.width / 2, 4, " ".join(words[1:]))
+        else:
+            canvas.drawCentredString(self.width / 2, 8, self.title)
+
+
+class TotalScoreWidget(Flowable):
+    """Большой виджет общего балла."""
+    
+    def __init__(self, score: int, level: str, width: float = 100, height: float = 100):
+        Flowable.__init__(self)
+        self.score = score
+        self.level = level
+        self.width = width
+        self.height = height
+    
+    def draw(self):
+        canvas = self.canv
+        
+        # Определяем цвет по баллу
+        if self.score >= 80:
+            color = Colors.EXCELLENT
+        elif self.score >= 60:
+            color = Colors.GOOD
+        elif self.score >= 40:
+            color = Colors.AVERAGE
+        else:
+            color = Colors.LOW
+        
+        cx, cy = self.width / 2, self.height / 2
+        radius = min(self.width, self.height) / 2 - 5
+        
+        # Фоновый круг
+        canvas.setStrokeColor(Colors.LIGHT_BG)
+        canvas.setLineWidth(8)
+        canvas.circle(cx, cy, radius, stroke=1, fill=0)
+        
+        # Прогресс (дуга)
+        canvas.setStrokeColor(color)
+        canvas.setLineWidth(8)
+        
+        # Рисуем дугу (от 90° против часовой стрелки)
+        angle = 360 * (self.score / 100)
+        canvas.arc(
+            cx - radius, cy - radius,
+            cx + radius, cy + radius,
+            90, -angle
+        )
+        
+        # Балл в центре
+        canvas.setFillColor(Colors.TEXT_PRIMARY)
+        canvas.setFont(FONT_BOLD, 28)
+        canvas.drawCentredString(cx, cy + 5, str(self.score))
+        
+        # "из 100"
+        canvas.setFont(FONT_NAME, 10)
+        canvas.setFillColor(Colors.TEXT_SECONDARY)
+        canvas.drawCentredString(cx, cy - 12, "из 100")
+        
+        # Уровень снизу
+        canvas.setFont(FONT_BOLD, 9)
+        canvas.setFillColor(color)
+        canvas.drawCentredString(cx, 5, self.level)
+
+
+class BenchmarkBar(Flowable):
+    """Визуальное сравнение с бенчмарком."""
+    
+    def __init__(
+        self,
+        user_score: int,
+        avg_score: float,
+        label: str = "Ваш результат vs Среднее",
+        width: float = 150,
+        height: float = 30,
+    ):
+        Flowable.__init__(self)
+        self.user_score = user_score
+        self.avg_score = avg_score
+        self.label = label
+        self.width = width
+        self.height = height
+    
+    def draw(self):
+        canvas = self.canv
+        
+        bar_y = 10
+        bar_height = 12
+        
+        # Подпись
+        canvas.setFont(FONT_NAME, 7)
+        canvas.setFillColor(Colors.TEXT_SECONDARY)
+        canvas.drawString(0, self.height - 5, self.label)
+        
+        # Фон бара
+        canvas.setFillColor(Colors.LIGHT_BG)
+        canvas.roundRect(0, bar_y, self.width, bar_height, 3, stroke=0, fill=1)
+        
+        # Среднее (серый)
+        avg_x = self.width * (self.avg_score / 100)
+        canvas.setFillColor(Colors.TEXT_MUTED)
+        canvas.roundRect(0, bar_y, avg_x, bar_height, 3, stroke=0, fill=1)
+        
+        # Юзер (цветной)
+        user_x = self.width * (self.user_score / 100)
+        if self.user_score >= self.avg_score:
+            color = Colors.EXCELLENT
+        else:
+            color = Colors.AVERAGE
+        
+        canvas.setFillColor(color)
+        canvas.roundRect(0, bar_y, user_x, bar_height, 3, stroke=0, fill=1)
+        
+        # Маркер среднего
+        canvas.setStrokeColor(Colors.TEXT_PRIMARY)
+        canvas.setLineWidth(2)
+        canvas.line(avg_x, bar_y - 2, avg_x, bar_y + bar_height + 2)
+        
+        # Подписи значений
+        canvas.setFont(FONT_NAME, 6)
+        canvas.setFillColor(Colors.TEXT_SECONDARY)
+        canvas.drawCentredString(avg_x, 2, f"Ср: {self.avg_score:.0f}")
+        
+        canvas.setFillColor(color)
+        canvas.setFont(FONT_BOLD, 7)
+        canvas.drawString(self.width + 5, bar_y + 2, f"{self.user_score}")
+
+
+# ========================================
+# ОСНОВНОЙ ГЕНЕРАТОР
+# ========================================
 
 def generate_pdf_report(
     role_name: str,
@@ -53,9 +450,13 @@ def generate_pdf_report(
     report_text: str,
     conversation_history: list[dict],
     user_name: str = "Кандидат",
+    profile_data: dict | None = None,
+    pdp_data: dict | None = None,
+    benchmark_data: dict | None = None,
+    raw_averages: dict | None = None,
 ) -> bytes:
     """
-    Сгенерировать PDF-отчёт.
+    Сгенерировать красивый PDF-отчёт.
     
     Args:
         role_name: Название роли
@@ -64,6 +465,10 @@ def generate_pdf_report(
         report_text: Текст отчёта (HTML)
         conversation_history: История диалога
         user_name: Имя пользователя
+        profile_data: Данные профиля компетенций
+        pdp_data: Данные PDP
+        benchmark_data: Данные бенчмарка
+        raw_averages: Сырые средние по 12 метрикам
         
     Returns:
         PDF как bytes
@@ -73,10 +478,10 @@ def generate_pdf_report(
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        rightMargin=20*mm,
-        leftMargin=20*mm,
-        topMargin=20*mm,
-        bottomMargin=20*mm,
+        rightMargin=15*mm,
+        leftMargin=15*mm,
+        topMargin=15*mm,
+        bottomMargin=15*mm,
     )
     
     # Стили
@@ -84,173 +489,540 @@ def generate_pdf_report(
     
     # Кастомные стили
     title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
+        'Title',
+        fontName=FONT_BOLD,
+        fontSize=28,
+        leading=32,
+        textColor=Colors.PRIMARY,
+        spaceAfter=5,
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'Subtitle',
         fontName=FONT_NAME,
-        fontSize=24,
-        spaceAfter=12,
-        textColor=colors.HexColor('#1a1a2e'),
+        fontSize=12,
+        textColor=Colors.TEXT_SECONDARY,
+        spaceAfter=20,
     )
     
     heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading2'],
-        fontName=FONT_NAME,
+        'Heading',
+        fontName=FONT_BOLD,
         fontSize=14,
-        spaceBefore=12,
-        spaceAfter=6,
-        textColor=colors.HexColor('#16213e'),
+        textColor=Colors.PRIMARY,
+        spaceBefore=15,
+        spaceAfter=10,
+        borderPadding=5,
+    )
+    
+    subheading_style = ParagraphStyle(
+        'Subheading',
+        fontName=FONT_BOLD,
+        fontSize=11,
+        textColor=Colors.SECONDARY,
+        spaceBefore=10,
+        spaceAfter=5,
     )
     
     body_style = ParagraphStyle(
-        'CustomBody',
-        parent=styles['Normal'],
+        'Body',
         fontName=FONT_NAME,
-        fontSize=10,
-        leading=14,
-        spaceAfter=6,
+        fontSize=9,
+        leading=13,
+        textColor=Colors.TEXT_PRIMARY,
+        spaceAfter=4,
     )
     
     small_style = ParagraphStyle(
-        'SmallText',
-        parent=styles['Normal'],
+        'Small',
         fontName=FONT_NAME,
         fontSize=8,
-        textColor=colors.grey,
+        textColor=Colors.TEXT_SECONDARY,
+    )
+    
+    accent_style = ParagraphStyle(
+        'Accent',
+        fontName=FONT_BOLD,
+        fontSize=10,
+        textColor=Colors.HIGHLIGHT,
+        spaceBefore=5,
+        spaceAfter=5,
     )
     
     # Элементы документа
     elements = []
-    
-    # Заголовок
-    elements.append(Paragraph("DEEP DIAGNOSTIC", title_style))
-    elements.append(Paragraph(
-        f"Отчёт о диагностике специалиста",
-        body_style
-    ))
-    elements.append(Spacer(1, 10*mm))
-    
-    # Информация о кандидате
-    elements.append(Paragraph("ПРОФИЛЬ", heading_style))
-    
-    profile_data = [
-        ["Имя:", user_name],
-        ["Роль:", role_name],
-        ["Опыт:", experience],
-        ["Дата:", datetime.now().strftime("%d.%m.%Y %H:%M")],
-    ]
-    
-    profile_table = Table(profile_data, colWidths=[40*mm, 100*mm])
-    profile_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), FONT_NAME),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('TEXTCOLOR', (0, 0), (0, -1), colors.grey),
-        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-    ]))
-    elements.append(profile_table)
-    elements.append(Spacer(1, 8*mm))
-    
-    # Баллы
-    elements.append(Paragraph("РЕЗУЛЬТАТЫ", heading_style))
     
     total = scores.get('total', 0)
     
     # Определяем уровень
     if total >= 80:
         level = "Senior / Lead"
-        level_color = colors.HexColor('#27ae60')
+        level_emoji = "🏆"
     elif total >= 60:
         level = "Middle+"
-        level_color = colors.HexColor('#2980b9')
+        level_emoji = "💪"
     elif total >= 40:
         level = "Middle"
-        level_color = colors.HexColor('#f39c12')
+        level_emoji = "📈"
     else:
         level = "Junior / Junior+"
-        level_color = colors.HexColor('#e74c3c')
+        level_emoji = "🌱"
     
-    scores_data = [
-        ["Категория", "Баллы", "Максимум"],
-        ["Hard Skills", str(scores.get('hard_skills', 0)), "30"],
-        ["Soft Skills", str(scores.get('soft_skills', 0)), "25"],
-        ["Thinking", str(scores.get('thinking', 0)), "25"],
-        ["Mindset", str(scores.get('mindset', 0)), "20"],
-        ["ИТОГО", str(total), "100"],
+    # ========================================
+    # СТРАНИЦА 1: ТИТУЛЬНАЯ
+    # ========================================
+    
+    # Большой заголовок
+    big_title_style = ParagraphStyle(
+        'BigTitle',
+        fontName=FONT_BOLD,
+        fontSize=36,
+        leading=40,
+        textColor=Colors.PRIMARY,
+        alignment=TA_CENTER,
+        spaceAfter=5,
+    )
+    elements.append(Spacer(1, 20*mm))
+    elements.append(Paragraph("DEEP DIAGNOSTIC", big_title_style))
+    
+    # Подзаголовок
+    tagline_style = ParagraphStyle(
+        'Tagline',
+        fontName=FONT_NAME,
+        fontSize=14,
+        textColor=Colors.TEXT_SECONDARY,
+        alignment=TA_CENTER,
+        spaceAfter=25,
+    )
+    elements.append(Paragraph("Профессиональная диагностика специалиста", tagline_style))
+    
+    # Дата отчёта
+    date_style = ParagraphStyle(
+        'Date',
+        fontName=FONT_NAME,
+        fontSize=10,
+        textColor=Colors.TEXT_MUTED,
+        alignment=TA_CENTER,
+        spaceAfter=15,
+    )
+    elements.append(Paragraph(datetime.now().strftime('%d %B %Y').replace(
+        'January', 'Января').replace('February', 'Февраля').replace('March', 'Марта').replace(
+        'April', 'Апреля').replace('May', 'Мая').replace('June', 'Июня').replace(
+        'July', 'Июля').replace('August', 'Августа').replace('September', 'Сентября').replace(
+        'October', 'Октября').replace('November', 'Ноября').replace('December', 'Декабря'
+    ), date_style))
+    
+    elements.append(Spacer(1, 10*mm))
+    
+    # Информация о кандидате (карточка)
+    info_data = [
+        [Paragraph(f"<b>{user_name}</b>", body_style)],
+        [Paragraph(f"{role_name} • {experience}", small_style)],
     ]
     
-    scores_table = Table(scores_data, colWidths=[60*mm, 30*mm, 30*mm])
-    scores_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), FONT_NAME),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a2e')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f0f0f0')),
-        ('FONTNAME', (0, -1), (-1, -1), FONT_NAME),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
+    info_table = Table(info_data, colWidths=[120*mm])
+    info_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ('BACKGROUND', (0, 0), (-1, -1), Colors.LIGHT_BG),
+        ('BOX', (0, 0), (-1, -1), 1, Colors.PRIMARY),
+        ('ROUNDEDCORNERS', [5, 5, 5, 5]),
     ]))
-    elements.append(scores_table)
-    elements.append(Spacer(1, 4*mm))
+    elements.append(info_table)
+    elements.append(Spacer(1, 15*mm))
     
-    # Уровень
-    level_style = ParagraphStyle(
-        'LevelStyle',
-        parent=body_style,
-        fontSize=12,
-        textColor=level_color,
+    # ========================================
+    # СЕКЦИЯ: ОБЩИЙ РЕЗУЛЬТАТ
+    # ========================================
+    
+    elements.append(Paragraph("ОБЩИЙ РЕЗУЛЬТАТ", heading_style))
+    
+    # Виджеты баллов (на русском)
+    score_widgets = Table(
+        [[
+            TotalScoreWidget(total, level, width=80, height=80),
+            Spacer(10, 1),
+            Table([
+                [
+                    ScoreCard("Навыки", scores.get('hard_skills', 0), 30, Colors.HARD_SKILLS, width=38, height=48),
+                    ScoreCard("Софт", scores.get('soft_skills', 0), 25, Colors.SOFT_SKILLS, width=38, height=48),
+                    ScoreCard("Мышление", scores.get('thinking', 0), 25, Colors.THINKING, width=38, height=48),
+                    ScoreCard("Майндсет", scores.get('mindset', 0), 20, Colors.MINDSET, width=38, height=48),
+                ]
+            ], colWidths=[40*mm, 40*mm, 40*mm, 40*mm]),
+        ]],
+        colWidths=[85*mm, 5*mm, 90*mm]
     )
-    elements.append(Paragraph(f"<b>Уровень: {level}</b>", level_style))
+    score_widgets.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+    ]))
+    elements.append(score_widgets)
     elements.append(Spacer(1, 8*mm))
     
-    # Детальный отчёт
+    # Бенчмарк (если есть)
+    if benchmark_data:
+        avg_score = benchmark_data.get("avg_score", 50)
+        elements.append(
+            BenchmarkBar(total, avg_score, "Твой результат vs Среднее", width=170, height=28)
+        )
+        elements.append(Spacer(1, 5*mm))
+    
+    # ========================================
+    # СЕКЦИЯ: RADAR CHART КОМПЕТЕНЦИЙ
+    # ========================================
+    
+    if raw_averages:
+        elements.append(Paragraph("КАРТА КОМПЕТЕНЦИЙ", heading_style))
+        
+        # Radar chart + легенда
+        radar_section = Table(
+            [[
+                RadarChart(raw_averages, width=160, height=160),
+                Spacer(10, 1),
+                # Легенда с progress bars
+                Table([
+                    [ProgressBar(raw_averages.get("expertise", 5), 10, width=100, height=10, label="Экспертиза", color=Colors.HARD_SKILLS)],
+                    [ProgressBar(raw_averages.get("methodology", 5), 10, width=100, height=10, label="Методология", color=Colors.HARD_SKILLS)],
+                    [ProgressBar(raw_averages.get("tools_proficiency", 5), 10, width=100, height=10, label="Инструменты", color=Colors.HARD_SKILLS)],
+                    [Spacer(1, 3)],
+                    [ProgressBar(raw_averages.get("articulation", 5), 10, width=100, height=10, label="Коммуникация", color=Colors.SOFT_SKILLS)],
+                    [ProgressBar(raw_averages.get("self_awareness", 5), 10, width=100, height=10, label="Самосознание", color=Colors.SOFT_SKILLS)],
+                    [ProgressBar(raw_averages.get("conflict_handling", 5), 10, width=100, height=10, label="Конфликты", color=Colors.SOFT_SKILLS)],
+                    [Spacer(1, 3)],
+                    [ProgressBar(raw_averages.get("depth", 5), 10, width=100, height=10, label="Глубина", color=Colors.THINKING)],
+                    [ProgressBar(raw_averages.get("structure", 5), 10, width=100, height=10, label="Структура", color=Colors.THINKING)],
+                    [ProgressBar(raw_averages.get("systems_thinking", 5), 10, width=100, height=10, label="Системность", color=Colors.THINKING)],
+                    [ProgressBar(raw_averages.get("creativity", 5), 10, width=100, height=10, label="Креативность", color=Colors.THINKING)],
+                    [Spacer(1, 3)],
+                    [ProgressBar(raw_averages.get("honesty", 5), 10, width=100, height=10, label="Честность", color=Colors.MINDSET)],
+                    [ProgressBar(raw_averages.get("growth_orientation", 5), 10, width=100, height=10, label="Рост", color=Colors.MINDSET)],
+                ], colWidths=[110*mm]),
+            ]],
+            colWidths=[90*mm, 5*mm, 85*mm]
+        )
+        radar_section.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ]))
+        elements.append(radar_section)
+        elements.append(Spacer(1, 8*mm))
+    
+    # ========================================
+    # СЕКЦИЯ: ПРОФИЛЬ КОМПЕТЕНЦИЙ
+    # ========================================
+    
+    if profile_data:
+        elements.append(Paragraph("ПРОФИЛЬ КОМПЕТЕНЦИЙ", heading_style))
+        
+        # Две колонки: сильные стороны + зоны роста
+        strengths = profile_data.get("strengths", [])
+        growth = profile_data.get("growth_areas", [])
+        
+        col1_content = []
+        col2_content = []
+        
+        col1_content.append(Paragraph("<b>💪 Сильные стороны</b>", subheading_style))
+        for s in strengths[:3]:
+            col1_content.append(Paragraph(f"• {s}", body_style))
+        
+        col2_content.append(Paragraph("<b>📈 Зоны развития</b>", subheading_style))
+        for g in growth[:3]:
+            col2_content.append(Paragraph(f"• {g}", body_style))
+        
+        profile_cols = Table(
+            [[col1_content, col2_content]],
+            colWidths=[90*mm, 90*mm]
+        )
+        profile_cols.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        elements.append(profile_cols)
+        elements.append(Spacer(1, 5*mm))
+        
+        # Стили мышления
+        thinking_style = profile_data.get("thinking_style", "")
+        comm_style = profile_data.get("communication_style", "")
+        
+        if thinking_style or comm_style:
+            styles_data = []
+            if thinking_style:
+                styles_data.append(["🧠 Стиль мышления:", thinking_style[:80]])
+            if comm_style:
+                styles_data.append(["💬 Коммуникация:", comm_style[:80]])
+            
+            styles_table = Table(styles_data, colWidths=[45*mm, 135*mm])
+            styles_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (0, -1), FONT_BOLD),
+                ('FONTNAME', (1, 0), (1, -1), FONT_NAME),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('TEXTCOLOR', (0, 0), (-1, -1), Colors.TEXT_PRIMARY),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 3),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ]))
+            elements.append(styles_table)
+    
+    # ========================================
+    # СТРАНИЦА 2: PDP
+    # ========================================
+    
+    if pdp_data:
+        elements.append(PageBreak())
+        elements.append(Paragraph("ПЛАН РАЗВИТИЯ НА 30 ДНЕЙ", heading_style))
+        
+        # Главный фокус (без эмодзи)
+        main_focus = pdp_data.get("main_focus", "")
+        if main_focus:
+            elements.append(Paragraph(f"<b>Главный фокус:</b> {main_focus}", body_style))
+            elements.append(Spacer(1, 5*mm))
+        
+        # Приоритетные цели
+        primary_goals = pdp_data.get("primary_goals", [])
+        if primary_goals:
+            elements.append(Paragraph("<b>Приоритетные зоны развития</b>", subheading_style))
+            
+            for i, goal in enumerate(primary_goals[:3], 1):
+                metric_name = goal.get("metric_name", "")
+                current = goal.get("current_score", 0)
+                target = goal.get("target_score", 0)
+                priority_reason = goal.get("priority_reason", "")
+                timeline = goal.get("timeline", "")
+                
+                # Заголовок цели
+                goal_header = f"<b>{i}. {metric_name}</b>"
+                elements.append(Paragraph(goal_header, body_style))
+                
+                # Прогресс
+                progress_text = f"   Текущий уровень: {current:.1f}/10 → Цель: {target:.1f}/10"
+                elements.append(Paragraph(progress_text, small_style))
+                
+                if priority_reason:
+                    elements.append(Paragraph(f"   Почему важно: {priority_reason[:100]}", small_style))
+                if timeline:
+                    elements.append(Paragraph(f"   Срок: {timeline}", small_style))
+                
+                # Действия
+                actions = goal.get("actions", [])
+                if actions:
+                    elements.append(Paragraph("   <b>Что делать:</b>", small_style))
+                    for action in actions[:3]:
+                        action_text = action.get("action", "") if isinstance(action, dict) else str(action)
+                        if action_text:
+                            elements.append(Paragraph(f"   • {action_text[:80]}", small_style))
+                
+                # Ресурсы для этой цели
+                resources = goal.get("resources", [])
+                if resources:
+                    elements.append(Paragraph("   <b>Ресурсы:</b>", small_style))
+                    for res in resources[:2]:
+                        res_title = res.get("title", "") if isinstance(res, dict) else str(res)
+                        res_author = res.get("author", "") if isinstance(res, dict) else ""
+                        res_type = res.get("type", "") if isinstance(res, dict) else ""
+                        type_icon = {"book": "[Книга]", "course": "[Курс]", "practice": "[Практика]", "tool": "[Инструмент]"}.get(res_type, "")
+                        res_line = f"   • {type_icon} {res_title}"
+                        if res_author:
+                            res_line += f" — {res_author}"
+                        elements.append(Paragraph(res_line[:100], small_style))
+                
+                elements.append(Spacer(1, 3*mm))
+            
+            elements.append(Spacer(1, 5*mm))
+        
+        # План на 30 дней (только один срок)
+        plan_30 = pdp_data.get("plan_30_days", [])
+        if plan_30:
+            elements.append(Paragraph("<b>План действий (30 дней)</b>", subheading_style))
+            for i, item in enumerate(plan_30[:6], 1):
+                # Убираем эмодзи
+                clean_item = item.lstrip("📚✅🎯▸• ")
+                elements.append(Paragraph(f"{i}. {clean_item}", body_style))
+        
+        # Метрики успеха
+        success_metrics = pdp_data.get("success_metrics", [])
+        if success_metrics:
+            elements.append(Spacer(1, 5*mm))
+            elements.append(Paragraph("<b>📈 Как измерить успех</b>", subheading_style))
+            for item in success_metrics[:4]:
+                clean_item = item.lstrip("📈✅🔄📚▸• ")
+                elements.append(Paragraph(f"• {clean_item}", body_style))
+    
+    # ========================================
+    # СТРАНИЦА 3: ДЕТАЛЬНЫЙ АНАЛИЗ
+    # ========================================
+    
+    elements.append(PageBreak())
     elements.append(Paragraph("ДЕТАЛЬНЫЙ АНАЛИЗ", heading_style))
     
     # Очищаем HTML теги и конвертируем
     clean_report = report_text
-    # Заменяем HTML теги на reportlab-совместимые
-    clean_report = clean_report.replace('<b>', '<b>').replace('</b>', '</b>')
-    clean_report = clean_report.replace('<i>', '<i>').replace('</i>', '</i>')
-    clean_report = clean_report.replace('━', '-')
-    clean_report = clean_report.replace('•', '  *')
+    clean_report = clean_report.replace('━', '—')
+    clean_report = clean_report.replace('•', '•')
+    clean_report = clean_report.replace('▸', '•')
+    
+    # Убираем лишние эмодзи для PDF
+    import re
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "]+", flags=re.UNICODE
+    )
+    clean_report = emoji_pattern.sub('', clean_report)
     
     # Разбиваем на параграфы
     paragraphs = clean_report.split('\n\n')
     for para in paragraphs:
         if para.strip():
-            # Убираем лишние переносы
             para = para.replace('\n', ' ').strip()
             if para:
                 try:
                     elements.append(Paragraph(para, body_style))
                 except Exception:
-                    # Если не удалось распарсить HTML — добавляем как текст
-                    elements.append(Paragraph(para.replace('<', '&lt;').replace('>', '&gt;'), body_style))
+                    elements.append(Paragraph(
+                        para.replace('<', '&lt;').replace('>', '&gt;'),
+                        body_style
+                    ))
     
-    elements.append(Spacer(1, 10*mm))
+    # ========================================
+    # СТРАНИЦА 4: ИСТОРИЯ ДИАЛОГА (опционально)
+    # ========================================
     
-    # История диалога
-    if conversation_history:
+    if conversation_history and len(conversation_history) > 0:
+        elements.append(PageBreak())
         elements.append(Paragraph("ИСТОРИЯ ДИАЛОГА", heading_style))
+        elements.append(Paragraph(
+            "Полная запись вопросов и ответов диагностики",
+            small_style
+        ))
+        elements.append(Spacer(1, 5*mm))
         
         for i, item in enumerate(conversation_history, 1):
-            elements.append(Paragraph(f"<b>Вопрос {i}:</b>", body_style))
-            elements.append(Paragraph(item.get('question', ''), body_style))
-            elements.append(Paragraph(f"<b>Ответ:</b>", body_style))
-            answer = item.get('answer', '')[:500]
-            if len(item.get('answer', '')) > 500:
+            # Вопрос
+            q_style = ParagraphStyle(
+                'Question',
+                fontName=FONT_BOLD,
+                fontSize=9,
+                textColor=Colors.SECONDARY,
+                spaceBefore=8,
+                spaceAfter=3,
+            )
+            question = item.get('question', '')[:200]
+            elements.append(Paragraph(f"Вопрос {i}: {question}", q_style))
+            
+            # Ответ
+            answer = item.get('answer', '')[:400]
+            if len(item.get('answer', '')) > 400:
                 answer += "..."
-            elements.append(Paragraph(answer, body_style))
-            elements.append(Spacer(1, 4*mm))
+            
+            a_style = ParagraphStyle(
+                'Answer',
+                fontName=FONT_NAME,
+                fontSize=8,
+                textColor=Colors.TEXT_PRIMARY,
+                leftIndent=10,
+                spaceAfter=5,
+                leading=11,
+            )
+            elements.append(Paragraph(answer, a_style))
     
-    # Футер
-    elements.append(Spacer(1, 10*mm))
+    # ========================================
+    # СТРАНИЦА: МЕТОДОЛОГИЯ
+    # ========================================
+    
+    elements.append(PageBreak())
+    elements.append(Paragraph("МЕТОДОЛОГИЯ ОЦЕНКИ", heading_style))
+    
+    methodology_intro = ParagraphStyle(
+        'MethodologyIntro',
+        fontName=FONT_NAME,
+        fontSize=9,
+        textColor=Colors.TEXT_SECONDARY,
+        spaceAfter=10,
+    )
     elements.append(Paragraph(
-        f"Сгенерировано Deep Diagnostic Bot • {datetime.now().strftime('%d.%m.%Y')}",
-        small_style
+        "Диагностика основана на анализе ответов по 12 ключевым метрикам, "
+        "сгруппированным в 4 категории. AI-модель оценивает глубину, структуру "
+        "и содержание каждого ответа.",
+        methodology_intro
+    ))
+    
+    # Категории с описаниями
+    categories_info = [
+        ("Профессиональные навыки (30 баллов)", [
+            "Экспертиза — глубина знаний в своей области",
+            "Методология — владение фреймворками и процессами",
+            "Инструменты — практическое владение инструментарием",
+        ]),
+        ("Коммуникация (25 баллов)", [
+            "Артикуляция — ясность изложения мыслей",
+            "Самосознание — понимание своих сильных и слабых сторон",
+            "Работа с конфликтами — умение находить компромиссы",
+        ]),
+        ("Мышление (25 баллов)", [
+            "Глубина — способность к детальному анализу",
+            "Структура — логичность и последовательность",
+            "Системность — видение связей и закономерностей",
+            "Креативность — нестандартные подходы",
+        ]),
+        ("Майндсет (20 баллов)", [
+            "Честность — искренность и аутентичность ответов",
+            "Ориентация на рост — стремление к развитию",
+        ]),
+    ]
+    
+    for cat_title, metrics in categories_info:
+        elements.append(Paragraph(f"<b>{cat_title}</b>", subheading_style))
+        for metric in metrics:
+            elements.append(Paragraph(f"• {metric}", body_style))
+    
+    elements.append(Spacer(1, 8*mm))
+    
+    # Disclaimer
+    disclaimer_style = ParagraphStyle(
+        'Disclaimer',
+        fontName=FONT_NAME,
+        fontSize=8,
+        textColor=Colors.TEXT_MUTED,
+        spaceAfter=5,
+        backColor=Colors.LIGHT_BG,
+        leftIndent=5,
+        rightIndent=5,
+        borderPadding=5,
+    )
+    elements.append(Paragraph(
+        "<b>Важно:</b> Результаты диагностики носят рекомендательный характер. "
+        "Они основаны на анализе текстовых ответов и могут не отражать полную картину компетенций. "
+        "Для комплексной оценки рекомендуется использовать дополнительные методы.",
+        disclaimer_style
+    ))
+    
+    # ========================================
+    # ФУТЕР
+    # ========================================
+    
+    elements.append(Spacer(1, 15*mm))
+    
+    footer_style = ParagraphStyle(
+        'Footer',
+        fontName=FONT_NAME,
+        fontSize=8,
+        textColor=Colors.TEXT_MUTED,
+        alignment=TA_CENTER,
+    )
+    elements.append(Paragraph(
+        f"Сгенерировано Deep Diagnostic Bot • {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+        footer_style
+    ))
+    elements.append(Paragraph(
+        "Этот отчёт создан с использованием AI-технологий",
+        footer_style
     ))
     
     # Генерируем PDF
@@ -260,4 +1032,3 @@ def generate_pdf_report(
     buffer.close()
     
     return pdf_bytes
-
