@@ -33,34 +33,41 @@ logger = logging.getLogger(__name__)
 # ========================================
 
 class Colors:
-    """Цветовая схема отчёта."""
-    # Основные
-    PRIMARY = colors.HexColor('#1a1a2e')      # Тёмно-синий
-    SECONDARY = colors.HexColor('#16213e')    # Тёмный
-    ACCENT = colors.HexColor('#0f3460')       # Акцент
-    HIGHLIGHT = colors.HexColor('#e94560')    # Яркий акцент (красный)
+    """Премиальная цветовая схема отчёта (McKinsey-style)."""
     
-    # Уровни
-    EXCELLENT = colors.HexColor('#27ae60')    # Зелёный
-    GOOD = colors.HexColor('#2980b9')         # Синий
-    AVERAGE = colors.HexColor('#f39c12')      # Оранжевый
-    LOW = colors.HexColor('#e74c3c')          # Красный
+    # Основные — глубокий синий
+    PRIMARY = colors.HexColor('#1E3A5F')      # Deep Navy
+    SECONDARY = colors.HexColor('#2C5282')    # Royal Blue
+    ACCENT = colors.HexColor('#FF6B35')       # Vibrant Orange (акцент)
+    HIGHLIGHT = colors.HexColor('#FF6B35')    # Акцент
     
-    # Категории
-    HARD_SKILLS = colors.HexColor('#3498db')  # Синий
-    SOFT_SKILLS = colors.HexColor('#9b59b6')  # Фиолетовый
-    THINKING = colors.HexColor('#1abc9c')     # Бирюзовый
-    MINDSET = colors.HexColor('#e67e22')      # Оранжевый
+    # Уровни (градации)
+    EXCELLENT = colors.HexColor('#10B981')    # Emerald Green
+    GOOD = colors.HexColor('#3B82F6')         # Blue
+    AVERAGE = colors.HexColor('#F59E0B')      # Amber
+    LOW = colors.HexColor('#EF4444')          # Red
+    
+    # Категории — премиальная палитра
+    HARD_SKILLS = colors.HexColor('#6366F1')  # Indigo
+    SOFT_SKILLS = colors.HexColor('#8B5CF6')  # Purple
+    THINKING = colors.HexColor('#14B8A6')     # Teal
+    MINDSET = colors.HexColor('#F97316')      # Orange
     
     # Фоны
-    LIGHT_BG = colors.HexColor('#f8f9fa')
-    CARD_BG = colors.HexColor('#ffffff')
-    BORDER = colors.HexColor('#dee2e6')
+    LIGHT_BG = colors.HexColor('#F8FAFC')     # Slate 50
+    CARD_BG = colors.HexColor('#FFFFFF')
+    BORDER = colors.HexColor('#E2E8F0')       # Slate 200
+    DARK_BG = colors.HexColor('#0F172A')      # Slate 900 (для header)
     
     # Текст
-    TEXT_PRIMARY = colors.HexColor('#212529')
-    TEXT_SECONDARY = colors.HexColor('#6c757d')
-    TEXT_MUTED = colors.HexColor('#adb5bd')
+    TEXT_PRIMARY = colors.HexColor('#1E293B')   # Slate 800
+    TEXT_SECONDARY = colors.HexColor('#64748B') # Slate 500
+    TEXT_MUTED = colors.HexColor('#94A3B8')     # Slate 400
+    TEXT_WHITE = colors.HexColor('#FFFFFF')
+    
+    # Градиент эффекты
+    GRADIENT_START = colors.HexColor('#1E3A5F')
+    GRADIENT_END = colors.HexColor('#3B82F6')
 
 
 # ========================================
@@ -243,6 +250,119 @@ class RadarChart(Flowable):
             canvas.circle(x, y, 3, stroke=0, fill=1)
 
 
+class ScoreCircle(Flowable):
+    """Большой круговой индикатор с баллом в центре."""
+    
+    def __init__(
+        self, 
+        score: int, 
+        max_score: int = 100, 
+        size: float = 120,
+        label: str = "из 100",
+        sublabel: str = "",
+    ):
+        Flowable.__init__(self)
+        self.score = score
+        self.max_score = max_score
+        self.size = size
+        self.label = label
+        self.sublabel = sublabel
+        self.width = size
+        self.height = size
+    
+    def draw(self):
+        canvas = self.canv
+        cx, cy = self.size / 2, self.size / 2
+        radius = self.size / 2 - 8
+        
+        # Определяем цвет по баллу
+        if self.score >= 80:
+            color = Colors.EXCELLENT
+        elif self.score >= 60:
+            color = Colors.GOOD
+        elif self.score >= 40:
+            color = Colors.AVERAGE
+        else:
+            color = Colors.LOW
+        
+        # Фоновый круг (серый)
+        canvas.setStrokeColor(Colors.BORDER)
+        canvas.setLineWidth(12)
+        canvas.circle(cx, cy, radius, stroke=1, fill=0)
+        
+        # Прогресс-дуга
+        progress = self.score / self.max_score
+        start_angle = 90  # Начинаем сверху
+        extent = -360 * progress  # По часовой стрелке
+        
+        canvas.setStrokeColor(color)
+        canvas.setLineWidth(12)
+        # Рисуем дугу
+        from reportlab.graphics.shapes import Wedge
+        canvas.arc(
+            cx - radius, cy - radius,
+            cx + radius, cy + radius,
+            start_angle, extent
+        )
+        
+        # Балл в центре
+        canvas.setFillColor(Colors.TEXT_PRIMARY)
+        canvas.setFont(FONT_BOLD, 42)
+        canvas.drawCentredString(cx, cy + 5, str(self.score))
+        
+        # Подпись "из 100"
+        canvas.setFillColor(Colors.TEXT_SECONDARY)
+        canvas.setFont(FONT_REGULAR, 11)
+        canvas.drawCentredString(cx, cy - 18, self.label)
+        
+        # Дополнительная подпись (уровень)
+        if self.sublabel:
+            canvas.setFillColor(color)
+            canvas.setFont(FONT_SEMIBOLD, 10)
+            canvas.drawCentredString(cx, cy - 32, self.sublabel)
+
+
+class CategoryBadge(Flowable):
+    """Цветной badge для категории с баллом."""
+    
+    def __init__(
+        self, 
+        score: int, 
+        max_score: int, 
+        label: str,
+        color: colors.Color,
+        width: float = 70,
+        height: float = 55,
+    ):
+        Flowable.__init__(self)
+        self.score = score
+        self.max_score = max_score
+        self.label = label
+        self.color = color
+        self.width = width
+        self.height = height
+    
+    def draw(self):
+        canvas = self.canv
+        
+        # Фон badge
+        canvas.setFillColor(self.color)
+        canvas.roundRect(0, 0, self.width, self.height, 8, stroke=0, fill=1)
+        
+        # Балл
+        canvas.setFillColor(Colors.TEXT_WHITE)
+        canvas.setFont(FONT_BOLD, 22)
+        canvas.drawCentredString(self.width / 2, self.height - 25, str(self.score))
+        
+        # Максимум
+        canvas.setFont(FONT_REGULAR, 9)
+        canvas.drawCentredString(self.width / 2, self.height - 38, f"/ {self.max_score}")
+        
+        # Подпись
+        canvas.setFont(FONT_REGULAR, 8)
+        canvas.drawCentredString(self.width / 2, 6, self.label)
+
+
 class ProgressBar(Flowable):
     """Цветной progress bar."""
     
@@ -309,7 +429,7 @@ class ProgressBar(Flowable):
 
 
 class ScoreCard(Flowable):
-    """Карточка с баллом."""
+    """Премиальная карточка с баллом категории."""
     
     def __init__(
         self, 
@@ -317,8 +437,8 @@ class ScoreCard(Flowable):
         score: int, 
         max_score: int,
         color: colors.Color,
-        width: float = 40,
-        height: float = 50,
+        width: float = 45,
+        height: float = 55,
     ):
         Flowable.__init__(self)
         self.title = title
@@ -331,32 +451,28 @@ class ScoreCard(Flowable):
     def draw(self):
         canvas = self.canv
         
-        # Фон карточки
+        # Фон карточки с закруглёнными углами
         canvas.setFillColor(self.color)
-        canvas.roundRect(0, 0, self.width, self.height, 4, stroke=0, fill=1)
+        canvas.roundRect(0, 0, self.width, self.height, 8, stroke=0, fill=1)
         
-        # Балл
-        canvas.setFillColor(colors.white)
-        canvas.setFont(FONT_BOLD, 16)
-        canvas.drawCentredString(self.width / 2, self.height - 22, str(self.score))
+        # Балл (крупный, белый)
+        canvas.setFillColor(Colors.TEXT_WHITE)
+        canvas.setFont(FONT_BOLD, 22)
+        canvas.drawCentredString(self.width / 2, self.height - 26, str(self.score))
         
-        # Максимум
-        canvas.setFont(FONT_NAME, 8)
-        canvas.drawCentredString(self.width / 2, self.height - 32, f"/ {self.max_score}")
+        # Максимум (меньше, полупрозрачный)
+        canvas.setFillColor(colors.Color(1, 1, 1, alpha=0.8))
+        canvas.setFont(FONT_REGULAR, 10)
+        canvas.drawCentredString(self.width / 2, self.height - 40, f"/ {self.max_score}")
         
-        # Название
-        canvas.setFont(FONT_NAME, 6)
-        # Разбиваем на 2 строки если нужно
-        words = self.title.split()
-        if len(words) > 1:
-            canvas.drawCentredString(self.width / 2, 12, words[0])
-            canvas.drawCentredString(self.width / 2, 4, " ".join(words[1:]))
-        else:
-            canvas.drawCentredString(self.width / 2, 8, self.title)
+        # Название категории (внизу)
+        canvas.setFillColor(Colors.TEXT_WHITE)
+        canvas.setFont(FONT_MEDIUM, 8)
+        canvas.drawCentredString(self.width / 2, 8, self.title)
 
 
 class TotalScoreWidget(Flowable):
-    """Большой виджет общего балла."""
+    """Премиальный виджет общего балла с круговым прогрессом."""
     
     def __init__(self, score: int, level: str, width: float = 100, height: float = 100):
         Flowable.__init__(self)
@@ -371,24 +487,29 @@ class TotalScoreWidget(Flowable):
         # Определяем цвет по баллу
         if self.score >= 80:
             color = Colors.EXCELLENT
+            gradient_color = colors.HexColor('#059669')  # Darker green
         elif self.score >= 60:
             color = Colors.GOOD
+            gradient_color = colors.HexColor('#2563EB')
         elif self.score >= 40:
             color = Colors.AVERAGE
+            gradient_color = colors.HexColor('#D97706')
         else:
             color = Colors.LOW
+            gradient_color = colors.HexColor('#DC2626')
         
         cx, cy = self.width / 2, self.height / 2
-        radius = min(self.width, self.height) / 2 - 5
+        radius = min(self.width, self.height) / 2 - 8
         
-        # Фоновый круг
-        canvas.setStrokeColor(Colors.LIGHT_BG)
-        canvas.setLineWidth(8)
+        # Фоновый круг (тонкий, серый)
+        canvas.setStrokeColor(Colors.BORDER)
+        canvas.setLineWidth(10)
         canvas.circle(cx, cy, radius, stroke=1, fill=0)
         
-        # Прогресс (дуга)
+        # Прогресс-дуга (толстая, цветная)
         canvas.setStrokeColor(color)
-        canvas.setLineWidth(8)
+        canvas.setLineWidth(10)
+        canvas.setLineCap(1)  # Rounded ends
         
         # Рисуем дугу (от 90° против часовой стрелки)
         angle = 360 * (self.score / 100)
@@ -398,20 +519,20 @@ class TotalScoreWidget(Flowable):
             90, -angle
         )
         
-        # Балл в центре
+        # Балл в центре (крупный)
         canvas.setFillColor(Colors.TEXT_PRIMARY)
-        canvas.setFont(FONT_BOLD, 28)
-        canvas.drawCentredString(cx, cy + 5, str(self.score))
+        canvas.setFont(FONT_BOLD, 36)
+        canvas.drawCentredString(cx, cy + 8, str(self.score))
         
         # "из 100"
-        canvas.setFont(FONT_NAME, 10)
+        canvas.setFont(FONT_REGULAR, 11)
         canvas.setFillColor(Colors.TEXT_SECONDARY)
-        canvas.drawCentredString(cx, cy - 12, "из 100")
+        canvas.drawCentredString(cx, cy - 14, "из 100")
         
-        # Уровень снизу
-        canvas.setFont(FONT_BOLD, 9)
+        # Уровень снизу (с подсветкой)
+        canvas.setFont(FONT_SEMIBOLD, 10)
         canvas.setFillColor(color)
-        canvas.drawCentredString(cx, 5, self.level)
+        canvas.drawCentredString(cx, 3, self.level)
 
 
 class BenchmarkBar(Flowable):
