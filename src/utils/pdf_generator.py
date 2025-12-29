@@ -913,6 +913,80 @@ def generate_pdf_report(
     elements.append(score_widgets)
     elements.append(Spacer(1, 8*mm))
     
+    # ========================================
+    # СЕКЦИЯ: КЛЮЧЕВОЙ ИНСАЙТ + ТОП МЕТРИКИ
+    # ========================================
+    
+    # Карточка с уровнем
+    level_card_style = ParagraphStyle(
+        'LevelCard',
+        fontName=FONT_SEMIBOLD,
+        fontSize=11,
+        textColor=Colors.TEXT_PRIMARY,
+        alignment=TA_CENTER,
+    )
+    
+    # Определяем потенциал
+    if total >= 70:
+        potential = "Senior / Lead ready"
+        potential_color = Colors.EXCELLENT
+    elif total >= 50:
+        potential = "Middle → Senior potential"
+        potential_color = Colors.GOOD
+    elif total >= 35:
+        potential = "Junior+ → Middle path"
+        potential_color = Colors.AVERAGE
+    else:
+        potential = "Active growth needed"
+        potential_color = Colors.LOW
+    
+    level_text = f'<font color="{potential_color.hexval()}">{level_emoji} {potential}</font>'
+    elements.append(Paragraph(level_text, level_card_style))
+    elements.append(Spacer(1, 5*mm))
+    
+    # Топ-3 силы и слабости (если есть raw_averages)
+    if raw_averages:
+        # Сортируем метрики
+        metric_names = {
+            "expertise": "Экспертиза",
+            "methodology": "Методология", 
+            "tools_proficiency": "Инструменты",
+            "articulation": "Коммуникация",
+            "self_awareness": "Самосознание",
+            "conflict_handling": "Конфликты",
+            "depth": "Глубина мышления",
+            "structure": "Структурность",
+            "systems_thinking": "Системность",
+            "creativity": "Креативность",
+            "honesty": "Честность",
+            "growth_orientation": "Рост",
+        }
+        
+        sorted_metrics = sorted(raw_averages.items(), key=lambda x: x[1], reverse=True)
+        top_3 = sorted_metrics[:3]
+        bottom_3 = sorted_metrics[-3:]
+        
+        strengths_text = " • ".join([f"<b>{metric_names.get(k, k)}</b> ({v:.1f})" for k, v in top_3])
+        gaps_text = " • ".join([f"{metric_names.get(k, k)} ({v:.1f})" for k, v in bottom_3])
+        
+        insight_style = ParagraphStyle(
+            'Insight',
+            fontName=FONT_REGULAR,
+            fontSize=9,
+            textColor=Colors.TEXT_SECONDARY,
+            alignment=TA_CENTER,
+            leading=13,
+        )
+        
+        elements.append(Paragraph(f"💪 <b>Сильные:</b> {strengths_text}", insight_style))
+        elements.append(Spacer(1, 2*mm))
+        elements.append(Paragraph(f"🎯 <b>К развитию:</b> {gaps_text}", insight_style))
+        elements.append(Spacer(1, 5*mm))
+    
+    # Разделитель
+    elements.append(SectionDivider(width=180*mm, style="dots"))
+    elements.append(Spacer(1, 3*mm))
+    
     # Бенчмарк (если есть)
     if benchmark_data:
         avg_score = benchmark_data.get("avg_score", 50)
