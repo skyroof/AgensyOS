@@ -805,12 +805,12 @@ def generate_pdf_report(
             Spacer(10, 1),
             Table([
                 [
-                    ScoreCard("Навыки", scores.get('hard_skills', 0), 30, Colors.HARD_SKILLS, width=38, height=48),
-                    ScoreCard("Софт", scores.get('soft_skills', 0), 25, Colors.SOFT_SKILLS, width=38, height=48),
-                    ScoreCard("Мышление", scores.get('thinking', 0), 25, Colors.THINKING, width=38, height=48),
-                    ScoreCard("Майндсет", scores.get('mindset', 0), 20, Colors.MINDSET, width=38, height=48),
+                    ScoreCard("Hard", scores.get('hard_skills', 0), 30, Colors.HARD_SKILLS, width=42, height=52),
+                    ScoreCard("Soft", scores.get('soft_skills', 0), 25, Colors.SOFT_SKILLS, width=42, height=52),
+                    ScoreCard("Think", scores.get('thinking', 0), 25, Colors.THINKING, width=42, height=52),
+                    ScoreCard("Mind", scores.get('mindset', 0), 20, Colors.MINDSET, width=42, height=52),
                 ]
-            ], colWidths=[40*mm, 40*mm, 40*mm, 40*mm]),
+            ], colWidths=[44*mm, 44*mm, 44*mm, 44*mm]),
         ]],
         colWidths=[85*mm, 5*mm, 90*mm]
     )
