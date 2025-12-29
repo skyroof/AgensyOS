@@ -1,5 +1,5 @@
 @echo off
 git add .
-git commit -m "Add: Executive Summary with level, strengths, gaps"
+git commit -m "Improve: RadarChart with benchmark overlay and color coding"
 git push origin main
 ssh root@89.169.47.138 "cd /root/bot && git stash && git pull && git stash pop 2>/dev/null; docker compose down && docker compose up -d --build"

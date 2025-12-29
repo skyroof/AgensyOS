@@ -222,7 +222,31 @@ class RadarChart(Flowable):
             else:  # Слева
                 canvas.drawRightString(x_label, y_label - 2, metric_name)
         
-        # Рисуем полигон значений
+        # BENCHMARK: серый полигон для среднего (5.0)
+        benchmark_value = 5.0
+        benchmark_points = []
+        for i, _ in enumerate(metric_order):
+            angle = -math.pi / 2 + i * angle_step
+            r = self.radius * (benchmark_value / 10)
+            x = self.center_x + r * math.cos(angle)
+            y = self.center_y + r * math.sin(angle)
+            benchmark_points.append((x, y))
+        
+        # Заливка benchmark (серая, полупрозрачная)
+        bench_path = canvas.beginPath()
+        bench_path.moveTo(benchmark_points[0][0], benchmark_points[0][1])
+        for x, y in benchmark_points[1:]:
+            bench_path.lineTo(x, y)
+        bench_path.close()
+        
+        canvas.setFillColor(colors.Color(0.7, 0.7, 0.7, alpha=0.15))
+        canvas.setStrokeColor(Colors.TEXT_MUTED)
+        canvas.setLineWidth(1)
+        canvas.setDash([3, 3])  # Пунктирная линия
+        canvas.drawPath(bench_path, stroke=1, fill=1)
+        canvas.setDash([])  # Сброс пунктира
+        
+        # Рисуем полигон значений пользователя
         points = []
         for i, (metric_key, _) in enumerate(metric_order):
             value = self.metrics.get(metric_key, 5)
@@ -232,22 +256,37 @@ class RadarChart(Flowable):
             y = self.center_y + r * math.sin(angle)
             points.append((x, y))
         
-        # Заливка полигона
+        # Заливка полигона (градиент синий)
         path = canvas.beginPath()
         path.moveTo(points[0][0], points[0][1])
         for x, y in points[1:]:
             path.lineTo(x, y)
         path.close()
         
-        canvas.setFillColor(colors.Color(0.23, 0.65, 0.98, alpha=0.3))
+        canvas.setFillColor(colors.Color(0.39, 0.4, 0.95, alpha=0.25))  # Indigo
         canvas.setStrokeColor(Colors.HARD_SKILLS)
-        canvas.setLineWidth(2)
+        canvas.setLineWidth(2.5)
         canvas.drawPath(path, stroke=1, fill=1)
         
-        # Точки на вершинах
-        for x, y in points:
-            canvas.setFillColor(Colors.HARD_SKILLS)
-            canvas.circle(x, y, 3, stroke=0, fill=1)
+        # Точки на вершинах (с цветовой кодировкой)
+        for i, (metric_key, _) in enumerate(metric_order):
+            value = self.metrics.get(metric_key, 5)
+            x, y = points[i]
+            
+            # Цвет по значению
+            if value >= 7:
+                dot_color = Colors.EXCELLENT
+            elif value >= 5:
+                dot_color = Colors.AVERAGE
+            else:
+                dot_color = Colors.LOW
+            
+            canvas.setFillColor(dot_color)
+            canvas.circle(x, y, 4, stroke=0, fill=1)
+            # Белая обводка
+            canvas.setStrokeColor(Colors.CARD_BG)
+            canvas.setLineWidth(1.5)
+            canvas.circle(x, y, 4, stroke=1, fill=0)
 
 
 class ScoreCircle(Flowable):
