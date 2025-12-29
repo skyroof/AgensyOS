@@ -70,14 +70,28 @@ class Colors:
 try:
     import os
     
-    # Пробуем найти системные шрифты
+    # Пробуем найти системные шрифты (Windows + Linux)
     font_paths = {
         "regular": [
+            # Linux (DejaVu - поддерживает кириллицу)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            # Linux (Liberation)
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            # Windows
             "C:/Windows/Fonts/arial.ttf",
             "C:/Windows/Fonts/calibri.ttf",
             "C:/Windows/Fonts/segoeui.ttf",
         ],
         "bold": [
+            # Linux (DejaVu)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+            # Linux (Liberation)
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            # Windows
             "C:/Windows/Fonts/arialbd.ttf",
             "C:/Windows/Fonts/calibrib.ttf",
             "C:/Windows/Fonts/segoeuib.ttf",
@@ -91,12 +105,14 @@ try:
         if os.path.exists(font_path):
             pdfmetrics.registerFont(TTFont('CustomFont', font_path))
             FONT_NAME = 'CustomFont'
+            logger.info(f"Registered font: {font_path}")
             break
     
     for font_path in font_paths["bold"]:
         if os.path.exists(font_path):
             pdfmetrics.registerFont(TTFont('CustomFontBold', font_path))
             FONT_BOLD = 'CustomFontBold'
+            logger.info(f"Registered bold font: {font_path}")
             break
             
 except Exception as e:
