@@ -1130,7 +1130,171 @@ def generate_pdf_report(
             elements.append(styles_table)
     
     # ========================================
-    # СТРАНИЦА 2: PDP
+    # СТРАНИЦЫ 2-3: ДЕТАЛЬНЫЙ АНАЛИЗ ПО КАТЕГОРИЯМ
+    # ========================================
+    
+    if raw_averages:
+        elements.append(PageBreak())
+        elements.append(Paragraph("АНАЛИЗ ПО КАТЕГОРИЯМ", heading_style))
+        
+        # Определяем метрики для каждой категории
+        category_metrics = {
+            "hard_skills": {
+                "title": "Hard Skills",
+                "subtitle": "Профессиональные навыки",
+                "color": Colors.HARD_SKILLS,
+                "icon": "🔧",
+                "max_score": 30,
+                "metrics": ["expertise", "methodology", "tools_proficiency"],
+                "descriptions": {
+                    "expertise": "Глубина знаний в своей области, экспертиза",
+                    "methodology": "Владение фреймворками и процессами",
+                    "tools_proficiency": "Практическое владение инструментарием",
+                },
+                "insights": "Показывает уровень технической подготовки и практического опыта в профессии."
+            },
+            "soft_skills": {
+                "title": "Soft Skills", 
+                "subtitle": "Коммуникация и взаимодействие",
+                "color": Colors.SOFT_SKILLS,
+                "icon": "💬",
+                "max_score": 25,
+                "metrics": ["articulation", "self_awareness", "conflict_handling"],
+                "descriptions": {
+                    "articulation": "Ясность и структурность изложения мыслей",
+                    "self_awareness": "Понимание своих сильных и слабых сторон",
+                    "conflict_handling": "Умение находить компромиссы и решать конфликты",
+                },
+                "insights": "Отражает способность эффективно взаимодействовать с командой и стейкхолдерами."
+            },
+            "thinking": {
+                "title": "Thinking",
+                "subtitle": "Мышление и анализ",
+                "color": Colors.THINKING,
+                "icon": "🧠",
+                "max_score": 25,
+                "metrics": ["depth", "structure", "systems_thinking", "creativity"],
+                "descriptions": {
+                    "depth": "Способность к глубокому анализу проблем",
+                    "structure": "Логичность и последовательность рассуждений",
+                    "systems_thinking": "Видение связей и закономерностей",
+                    "creativity": "Нестандартные подходы к решению задач",
+                },
+                "insights": "Демонстрирует качество принятия решений и способность к стратегическому мышлению."
+            },
+            "mindset": {
+                "title": "Mindset",
+                "subtitle": "Установки и ценности",
+                "color": Colors.MINDSET,
+                "icon": "🎯",
+                "max_score": 20,
+                "metrics": ["honesty", "growth_orientation"],
+                "descriptions": {
+                    "honesty": "Искренность и аутентичность в ответах",
+                    "growth_orientation": "Стремление к развитию и обучению",
+                },
+                "insights": "Характеризует профессиональную зрелость и потенциал роста."
+            },
+        }
+        
+        metric_names = {
+            "expertise": "Экспертиза",
+            "methodology": "Методология", 
+            "tools_proficiency": "Инструменты",
+            "articulation": "Коммуникация",
+            "self_awareness": "Самосознание",
+            "conflict_handling": "Конфликты",
+            "depth": "Глубина",
+            "structure": "Структура",
+            "systems_thinking": "Системность",
+            "creativity": "Креативность",
+            "honesty": "Честность",
+            "growth_orientation": "Рост",
+        }
+        
+        # Генерируем карточки для каждой категории
+        for cat_key, cat_info in category_metrics.items():
+            cat_score = scores.get(cat_key, 0)
+            
+            # Заголовок категории с цветной полосой
+            cat_header_style = ParagraphStyle(
+                f'CatHeader_{cat_key}',
+                fontName=FONT_BOLD,
+                fontSize=13,
+                textColor=cat_info["color"],
+                spaceBefore=10,
+                spaceAfter=3,
+            )
+            
+            elements.append(Paragraph(
+                f'{cat_info["icon"]} {cat_info["title"]} — {cat_info["subtitle"]}',
+                cat_header_style
+            ))
+            
+            # Балл категории
+            cat_score_style = ParagraphStyle(
+                f'CatScore_{cat_key}',
+                fontName=FONT_SEMIBOLD,
+                fontSize=11,
+                textColor=Colors.TEXT_PRIMARY,
+                spaceAfter=5,
+            )
+            elements.append(Paragraph(
+                f'<b>{cat_score}</b> из {cat_info["max_score"]} баллов',
+                cat_score_style
+            ))
+            
+            # Метрики категории (таблица с progress bars)
+            metrics_rows = []
+            for m_key in cat_info["metrics"]:
+                m_value = raw_averages.get(m_key, 5.0)
+                m_name = metric_names.get(m_key, m_key)
+                m_desc = cat_info["descriptions"].get(m_key, "")
+                
+                # Цвет по значению
+                if m_value >= 7:
+                    m_color = Colors.EXCELLENT
+                elif m_value >= 5:
+                    m_color = Colors.AVERAGE
+                else:
+                    m_color = Colors.LOW
+                
+                metrics_rows.append([
+                    Paragraph(f'<b>{m_name}</b>', body_style),
+                    ProgressBar(m_value, 10, width=80, height=10, color=cat_info["color"]),
+                    Paragraph(f'{m_value:.1f}', body_style),
+                ])
+            
+            metrics_table = Table(
+                metrics_rows,
+                colWidths=[55*mm, 85*mm, 15*mm],
+            )
+            metrics_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 2),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ]))
+            elements.append(metrics_table)
+            
+            # Инсайт
+            insight_style = ParagraphStyle(
+                f'Insight_{cat_key}',
+                fontName=FONT_NAME,
+                fontSize=8,
+                textColor=Colors.TEXT_SECONDARY,
+                spaceAfter=8,
+                leftIndent=3,
+            )
+            elements.append(Paragraph(f'💡 {cat_info["insights"]}', insight_style))
+            
+            # Разделитель (кроме последней категории)
+            if cat_key != "mindset":
+                elements.append(SectionDivider(width=180*mm, style="line"))
+    
+    # ========================================
+    # СТРАНИЦА: PDP (Plan Development)
     # ========================================
     
     if pdp_data:
