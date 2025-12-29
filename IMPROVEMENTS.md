@@ -131,7 +131,7 @@
 - [x] Создать `Dockerfile`
 - [x] Создать `docker-compose.yml`
 - [x] Добавить `.dockerignore`
-- [ ] Локальный тест: `docker-compose up --build`
+- [x] Тест на сервере: `docker compose up --build`
 
 ### Этап 3: База данных ✅
 - [x] PostgreSQL через Supabase (бесплатный tier)
@@ -141,22 +141,22 @@
 ### Этап 4: Хостинг ✅
 - [x] Выбран Timeweb VPS
 
-### Этап 5: Сервер (VPS)
-- [ ] Ubuntu 22.04, 1GB+ RAM
-- [ ] SSH ключи
-- [ ] Docker + Docker Compose
-- [ ] Firewall (22, 80, 443)
+### Этап 5: Сервер (VPS) ✅
+- [x] Timeweb VPS Ubuntu 22.04
+- [x] Docker 29.1.3 + Compose 5.0.0
+- [ ] Firewall (опционально)
 
-### Этап 6: Запуск
-- [ ] `git clone` на сервер
-- [ ] Создать `.env` с секретами
-- [ ] `docker-compose up -d`
-- [ ] Проверить логи и бота
+### Этап 6: Запуск ✅
+- [x] GitHub репозиторий: https://github.com/skyroof/AgensyOS
+- [x] `git clone` на сервер
+- [x] `.env` с секретами
+- [x] `docker compose up -d --build`
+- [x] Бот работает на 89.169.47.138
 
-### Этап 7: Автоматизация
-- [ ] Restart policy / systemd
-- [ ] Мониторинг (UptimeRobot)
-- [ ] CI/CD (GitHub Actions)
+### Этап 7: Автоматизация ✅
+- [x] Docker restart policy (unless-stopped)
+- [x] Cron автодеплой каждые 5 минут
+- [ ] Мониторинг (UptimeRobot) — опционально
 
 ### Этап 8: Hardening
 - [ ] Sentry для ошибок
