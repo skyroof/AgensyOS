@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import String, Text, Integer, Float, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy.sql.elements import quoted_name
 
 
 class Base(DeclarativeBase):
@@ -51,8 +50,7 @@ class DiagnosticSession(Base):
     current_question: Mapped[int] = mapped_column(Integer, default=1)
     
     # Режим диагностики (монетизация)
-    # "mode" - зарезервированное слово в PostgreSQL, используем quoted_name
-    diagnostic_mode: Mapped[str] = mapped_column(quoted_name("mode", quote=True), String(10), default="full")  # demo / full
+    diagnostic_mode: Mapped[str] = mapped_column(String(10), default="full")  # demo / full
     
     # Итоговые баллы
     total_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
