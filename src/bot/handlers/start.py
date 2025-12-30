@@ -19,6 +19,7 @@ from src.bot.keyboards.inline import (
     get_session_recovery_keyboard,
     get_back_to_menu_keyboard,
     get_start_with_history_keyboard,
+    get_paywall_keyboard,
 )
 from src.db import get_session
 from src.db.repositories import (
@@ -29,6 +30,7 @@ from src.db.repositories import (
     get_completed_sessions,
     get_user_stats,
 )
+from src.db.repositories import balance_repo
 
 router = Router(name="start")
 logger = logging.getLogger(__name__)
@@ -52,7 +54,7 @@ WELCOME_TEXT = """
 """
 
 
-def get_welcome_text(first_name: str) -> str:
+def get_welcome_text(first_name: str, balance_info: str = "") -> str:
     """Персонализированное приветствие."""
     return f"""
 🎯 <b>Deep Diagnostic Bot</b>
@@ -66,7 +68,7 @@ def get_welcome_text(first_name: str) -> str:
 • Soft Skills — коммуникация и лидерство  
 • Thinking — системное мышление
 • Mindset — ценности и зрелость
-
+{balance_info}
 <b>Важно:</b> Отвечай развёрнуто и честно. Чем подробнее ответы — тем точнее диагностика.
 
 ⏱️ Время: ~15-20 минут
@@ -141,6 +143,7 @@ async def cmd_start(message: Message, state: FSMContext):
     # Проверяем, есть ли у пользователя завершённые диагностики
     has_completed = False
     best_score = None
+    balance_info = ""
     
     if db_user_id:
         try:
@@ -148,6 +151,16 @@ async def cmd_start(message: Message, state: FSMContext):
                 stats = await get_user_stats(db, db_user_id)
                 has_completed = stats["total_diagnostics"] > 0
                 best_score = stats["best_score"]
+                
+                # Получаем баланс диагностик
+                access = await balance_repo.check_diagnostic_access(db, db_user_id)
+                if access.balance > 0:
+                    balance_info = f"\n💎 <b>Баланс:</b> {access.balance} диагностик\n"
+                elif not access.demo_used:
+                    balance_info = "\n🆓 <b>Доступна бесплатная демо-диагностика!</b>\n"
+                else:
+                    balance_info = "\n🔒 <b>Нет доступных диагностик</b> — /buy\n"
+                    
         except Exception as e:
             logger.warning(f"Failed to get user stats: {e}")
     
@@ -159,7 +172,7 @@ async def cmd_start(message: Message, state: FSMContext):
     
     # Стандартный flow — персонализированное приветствие
     await message.answer(
-        get_welcome_text(user_first_name),
+        get_welcome_text(user_first_name, balance_info),
         reply_markup=keyboard,
     )
     await state.set_state(DiagnosticStates.choosing_role)
@@ -188,7 +201,7 @@ ONBOARDING_STEP1 = """
 
 ✅ Роль: <b>{role_name}</b>
 ✅ Опыт: <b>{exp_value}</b>
-
+{mode_info}
 ━━━━━━━━━━━━━━━━━━━━
 
 <b>📝 3 простых правила:</b>
@@ -208,7 +221,7 @@ ONBOARDING_STEP1 = """
 
 🎯 <b>Темы вопросов:</b> {question_topics}
 
-⏱️ <b>10 вопросов • ~15 минут</b>
+⏱️ <b>{questions_count} • {time_estimate}</b>
 """
 
 # Экран 2: Пример ответа
@@ -270,23 +283,34 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
     is_returning_user = False
     last_score = None
     
-    # Проверяем, есть ли у пользователя завершённые сессии (returning user)
+    # ==================== ПРОВЕРКА ДОСТУПА ====================
     if db_user_id:
         try:
             async with get_session() as db:
-                # Создаём сессию диагностики
-                db_session = await create_db_session(
-                    session=db,
-                    user_id=db_user_id,
-                    role=data["role"],
-                    role_name=data["role_name"],
-                    experience=exp_key,
-                    experience_name=exp_value,
-                )
-                await state.update_data(db_session_id=db_session.id)
-                logger.info(f"Created diagnostic session {db_session.id}")
+                access = await balance_repo.check_diagnostic_access(db, db_user_id)
                 
-                # Проверяем историю
+                if not access.allowed:
+                    # Нет доступа — показываем paywall
+                    await callback.message.edit_text(
+                        "🔒 <b>Нет доступных диагностик</b>\n\n"
+                        f"✅ Роль: <b>{data['role_name']}</b>\n"
+                        f"✅ Опыт: <b>{exp_value}</b>\n\n"
+                        "━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"Баланс: <b>{access.balance}</b> диагностик\n"
+                        f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
+                        "Купи диагностику, чтобы продолжить!",
+                        reply_markup=get_paywall_keyboard(),
+                    )
+                    await callback.answer("Нужна подписка", show_alert=True)
+                    return
+                
+                # Сохраняем информацию о доступе
+                await state.update_data(
+                    access_mode=access.mode,  # "demo" или "full"
+                    access_balance=access.balance,
+                )
+                
+                # Проверяем историю (returning user)
                 past_sessions = await get_user_sessions(db, db_user_id, limit=5)
                 completed = [s for s in past_sessions if s.status == "completed"]
                 if completed:
@@ -294,7 +318,7 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
                     last_score = completed[0].total_score
                     
         except Exception as e:
-            logger.error(f"Failed to create session: {e}")
+            logger.error(f"Failed to check access: {e}")
     
     # Для возвращающихся — сокращённый онбординг
     if is_returning_user:
@@ -319,11 +343,25 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
     experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
     question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
     
+    # Определяем режим диагностики
+    access_mode = data.get("access_mode", "full")
+    if access_mode == "demo":
+        mode_info = "\n🆓 <b>Режим: ДЕМО (бесплатно)</b>"
+        questions_count = "3 вопроса"
+        time_estimate = "~5 минут"
+    else:
+        mode_info = "\n💎 <b>Режим: ПОЛНАЯ диагностика</b>"
+        questions_count = "10 вопросов"
+        time_estimate = "~15 минут"
+    
     onboarding = ONBOARDING_STEP1.format(
         role_name=data['role_name'],
         exp_value=exp_value,
+        mode_info=mode_info,
         experience_tip=experience_tip,
         question_topics=question_topics,
+        questions_count=questions_count,
+        time_estimate=time_estimate,
     )
     
     await callback.message.edit_text(
@@ -354,11 +392,25 @@ async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
     experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
     question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
     
+    # Определяем режим диагностики
+    access_mode = data.get("access_mode", "full")
+    if access_mode == "demo":
+        mode_info = "\n🆓 <b>Режим: ДЕМО (бесплатно)</b>"
+        questions_count = "3 вопроса"
+        time_estimate = "~5 минут"
+    else:
+        mode_info = "\n💎 <b>Режим: ПОЛНАЯ диагностика</b>"
+        questions_count = "10 вопросов"
+        time_estimate = "~15 минут"
+    
     onboarding = ONBOARDING_STEP1.format(
         role_name=data.get('role_name', 'Специалист'),
         exp_value=data.get('experience_name', ''),
+        mode_info=mode_info,
         experience_tip=experience_tip,
         question_topics=question_topics,
+        questions_count=questions_count,
+        time_estimate=time_estimate,
     )
     
     await callback.message.edit_text(
