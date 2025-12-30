@@ -1,15 +1,17 @@
 """
 Репозиторий для работы с напоминаниями о диагностике.
 """
+
 from datetime import datetime, timedelta
 from typing import Optional
-from sqlalchemy import select, update, and_
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import DiagnosticReminder, UserSettings, DiagnosticSession, User
 
 
 # ==================== DIAGNOSTIC REMINDERS ====================
+
 
 async def schedule_diagnostic_reminder(
     session: AsyncSession,
@@ -21,11 +23,11 @@ async def schedule_diagnostic_reminder(
 ) -> DiagnosticReminder:
     """
     Запланировать напоминание о повторной диагностике.
-    
+
     По умолчанию через 30 дней после завершения.
     """
     scheduled_at = datetime.utcnow() + timedelta(days=days_delay)
-    
+
     reminder = DiagnosticReminder(
         user_id=user_id,
         session_id=session_id,
@@ -33,6 +35,30 @@ async def schedule_diagnostic_reminder(
         reminder_type=f"{days_delay}_days",
         last_score=last_score,
         focus_skill=focus_skill,
+        sent=False,
+        cancelled=False,
+    )
+    session.add(reminder)
+    await session.flush()
+    return reminder
+
+
+async def schedule_smart_reminder(
+    session: AsyncSession,
+    user_id: int,
+    session_id: int,
+    hours_delay: int = 24,
+) -> DiagnosticReminder:
+    """
+    Запланировать умное напоминание (через 24ч).
+    """
+    scheduled_at = datetime.utcnow() + timedelta(hours=hours_delay)
+
+    reminder = DiagnosticReminder(
+        user_id=user_id,
+        session_id=session_id,
+        scheduled_at=scheduled_at,
+        reminder_type=f"smart_{hours_delay}h",
         sent=False,
         cancelled=False,
     )
@@ -51,7 +77,7 @@ async def schedule_stuck_reminder(
     Запланировать напоминание о зависшей диагностике.
     """
     scheduled_at = datetime.utcnow() + timedelta(minutes=minutes_delay)
-    
+
     reminder = DiagnosticReminder(
         user_id=user_id,
         session_id=session_id,
@@ -76,8 +102,8 @@ async def cancel_stuck_reminders(
         .where(DiagnosticReminder.user_id == user_id)
         .where(DiagnosticReminder.session_id == session_id)
         .where(DiagnosticReminder.reminder_type.like("stuck_%"))
-        .where(DiagnosticReminder.sent == False)
-        .where(DiagnosticReminder.cancelled == False)
+        .where(DiagnosticReminder.sent.is_(False))
+        .where(DiagnosticReminder.cancelled.is_(False))
         .values(cancelled=True)
     )
     await session.execute(stmt)
@@ -89,18 +115,18 @@ async def get_pending_reminders_with_users(
 ) -> list[tuple[DiagnosticReminder, int]]:
     """
     Получить напоминания вместе с telegram_id пользователей.
-    
+
     Возвращает список кортежей (reminder, telegram_id).
     """
     if before is None:
         before = datetime.utcnow()
-    
+
     stmt = (
         select(DiagnosticReminder, User.telegram_id)
         .join(User, DiagnosticReminder.user_id == User.id)
         .where(DiagnosticReminder.scheduled_at <= before)
-        .where(DiagnosticReminder.sent == False)
-        .where(DiagnosticReminder.cancelled == False)
+        .where(DiagnosticReminder.sent.is_(False))
+        .where(DiagnosticReminder.cancelled.is_(False))
         .order_by(DiagnosticReminder.scheduled_at)
         .limit(100)
     )
@@ -114,7 +140,7 @@ async def get_pending_reminders(
 ) -> list[DiagnosticReminder]:
     """
     Получить напоминания, которые нужно отправить.
-    
+
     Возвращает напоминания где:
     - scheduled_at <= before (или now)
     - sent = False
@@ -122,12 +148,12 @@ async def get_pending_reminders(
     """
     if before is None:
         before = datetime.utcnow()
-    
+
     stmt = (
         select(DiagnosticReminder)
         .where(DiagnosticReminder.scheduled_at <= before)
-        .where(DiagnosticReminder.sent == False)
-        .where(DiagnosticReminder.cancelled == False)
+        .where(DiagnosticReminder.sent.is_(False))
+        .where(DiagnosticReminder.cancelled.is_(False))
         .order_by(DiagnosticReminder.scheduled_at)
         .limit(100)  # Batch limit
     )
@@ -184,8 +210,8 @@ async def get_user_pending_reminder(
     stmt = (
         select(DiagnosticReminder)
         .where(DiagnosticReminder.user_id == user_id)
-        .where(DiagnosticReminder.sent == False)
-        .where(DiagnosticReminder.cancelled == False)
+        .where(DiagnosticReminder.sent.is_(False))
+        .where(DiagnosticReminder.cancelled.is_(False))
         .order_by(DiagnosticReminder.scheduled_at.desc())
         .limit(1)
     )
@@ -201,8 +227,8 @@ async def cancel_user_reminders(
     stmt = (
         update(DiagnosticReminder)
         .where(DiagnosticReminder.user_id == user_id)
-        .where(DiagnosticReminder.sent == False)
-        .where(DiagnosticReminder.cancelled == False)
+        .where(DiagnosticReminder.sent.is_(False))
+        .where(DiagnosticReminder.cancelled.is_(False))
         .values(cancelled=True)
     )
     result = await session.execute(stmt)
@@ -216,11 +242,11 @@ async def user_has_recent_diagnostic(
 ) -> bool:
     """
     Проверить, проходил ли пользователь диагностику недавно.
-    
+
     Используется для умных напоминаний — не отправлять если уже прошёл.
     """
     threshold = datetime.utcnow() - timedelta(days=days)
-    
+
     stmt = (
         select(DiagnosticSession.id)
         .where(DiagnosticSession.user_id == user_id)
@@ -234,6 +260,7 @@ async def user_has_recent_diagnostic(
 
 # ==================== USER SETTINGS ====================
 
+
 async def get_or_create_user_settings(
     session: AsyncSession,
     user_id: int,
@@ -242,7 +269,7 @@ async def get_or_create_user_settings(
     stmt = select(UserSettings).where(UserSettings.user_id == user_id)
     result = await session.execute(stmt)
     settings = result.scalar_one_or_none()
-    
+
     if not settings:
         settings = UserSettings(
             user_id=user_id,
@@ -251,7 +278,7 @@ async def get_or_create_user_settings(
         )
         session.add(settings)
         await session.flush()
-    
+
     return settings
 
 
@@ -263,14 +290,10 @@ async def update_user_settings(
     """Обновить настройки пользователя."""
     # Сначала убедимся что settings существует
     await get_or_create_user_settings(session, user_id)
-    
+
     kwargs["updated_at"] = datetime.utcnow()
-    
-    stmt = (
-        update(UserSettings)
-        .where(UserSettings.user_id == user_id)
-        .values(**kwargs)
-    )
+
+    stmt = update(UserSettings).where(UserSettings.user_id == user_id).values(**kwargs)
     await session.execute(stmt)
 
 
@@ -281,8 +304,7 @@ async def get_users_with_reminders_enabled(
     stmt = (
         select(User.telegram_id)
         .join(UserSettings, UserSettings.user_id == User.id)
-        .where(UserSettings.diagnostic_reminders_enabled == True)
+        .where(UserSettings.diagnostic_reminders_enabled.is_(True))
     )
     result = await session.execute(stmt)
     return [row[0] for row in result.all()]
-

@@ -18,6 +18,20 @@ def get_role_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_goal_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора цели (Micro-commitment)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📈 Рост дохода", callback_data="goal:salary"),
+        InlineKeyboardButton(text="🚀 Поиск работы", callback_data="goal:job"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🧐 Оценка навыков", callback_data="goal:check"),
+        InlineKeyboardButton(text="👀 Просто интересно", callback_data="goal:curious"),
+    )
+    return builder.as_markup()
+
+
 def get_start_with_history_keyboard(has_completed: bool = False, best_score: int | None = None) -> InlineKeyboardMarkup:
     """
     Клавиатура выбора роли с дополнительной кнопкой истории.
@@ -81,6 +95,15 @@ def get_report_keyboard(session_id: int) -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="🔄 Пройти ещё раз", callback_data="restart"),
+    )
+    return builder.as_markup()
+
+
+def get_question_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура под вопросом (пауза, контекст)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⏸️ Сделать паузу", callback_data="pause_session"),
     )
     return builder.as_markup()
 
@@ -275,6 +298,19 @@ def get_after_share_keyboard(session_id: int) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="📋 К результатам", callback_data=f"back_to_results:{session_id}"),
     )
+    return builder.as_markup()
+
+
+def get_oto_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для One-Time Offer (скидка 30% на Pack 3)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔥 Забрать за 490₽ (-30%)", callback_data="oto_buy:pack3"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🙅‍♂️ Нет, спасибо", callback_data="delete_message"),
+    )
+    return builder.as_markup()
     builder.row(
         InlineKeyboardButton(text="🔄 Пройти снова", callback_data="restart"),
         InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu"),
@@ -327,6 +363,9 @@ def get_buy_keyboard(show_promo_applied: bool = False) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="📦 Пакет 10 шт • 1 990 ₽", callback_data="buy:pack10"),
     )
+    builder.row(
+        InlineKeyboardButton(text="⭐ Карьерный Трекер (1 мес) • 199 ₽", callback_data="buy:subscription_1m"),
+    )
     if show_promo_applied:
         builder.row(
             InlineKeyboardButton(text="✅ Промокод применён", callback_data="noop"),
@@ -335,6 +374,9 @@ def get_buy_keyboard(show_promo_applied: bool = False) -> InlineKeyboardMarkup:
         builder.row(
             InlineKeyboardButton(text="🎁 У меня есть промокод", callback_data="enter_promo"),
         )
+    builder.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu"),
+    )
     return builder.as_markup()
 
 
@@ -369,6 +411,9 @@ def get_paywall_keyboard() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="📦 Все тарифы", callback_data="show_pricing"),
         InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🏠 В главное меню", callback_data="main_menu"),
     )
     return builder.as_markup()
 

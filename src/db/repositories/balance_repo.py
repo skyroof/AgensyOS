@@ -24,21 +24,32 @@ class DiagnosticAccess(NamedTuple):
 
 async def get_or_create_balance(session: AsyncSession, user_id: int, commit: bool = True) -> UserBalance:
     """Получить или создать баланс пользователя."""
-    result = await session.execute(
-        select(UserBalance).where(UserBalance.user_id == user_id)
-    )
-    balance = result.scalar_one_or_none()
-    
-    if not balance:
-        balance = UserBalance(user_id=user_id)
-        session.add(balance)
-        if commit:
-            await session.commit()
-            await session.refresh(balance)
-        else:
-            await session.flush()
-    
-    return balance
+    # Блокировка для защиты от race condition
+    try:
+        result = await session.execute(
+            select(UserBalance).where(UserBalance.user_id == user_id).with_for_update()
+        )
+        balance = result.scalar_one_or_none()
+        
+        if not balance:
+            balance = UserBalance(user_id=user_id)
+            session.add(balance)
+            if commit:
+                await session.commit()
+                await session.refresh(balance)
+            else:
+                await session.flush()
+        
+        return balance
+    except Exception:
+        # Если не удалось заблокировать или другая ошибка — пробуем просто получить
+        result = await session.execute(
+            select(UserBalance).where(UserBalance.user_id == user_id)
+        )
+        balance = result.scalar_one_or_none()
+        if balance:
+            return balance
+        raise
 
 
 async def get_user_balance(session: AsyncSession, user_id: int) -> UserBalance:
@@ -96,7 +107,18 @@ async def use_diagnostic(session: AsyncSession, user_id: int, mode: str, commit:
     Returns:
         True если успешно списано
     """
-    balance = await get_or_create_balance(session, user_id, commit=False)
+    # Блокируем запись для обновления
+    result = await session.execute(
+        select(UserBalance).where(UserBalance.user_id == user_id).with_for_update()
+    )
+    balance = result.scalar_one_or_none()
+    
+    if not balance:
+        # Если баланса нет, создаем (тут race condition маловероятен, но возможен unique constraint error)
+        # В идеале нужно делать insert on conflict do nothing
+        balance = UserBalance(user_id=user_id)
+        session.add(balance)
+        await session.flush()  # Получаем ID и лочим
     
     if mode == "demo":
         if balance.demo_used:
@@ -387,7 +409,7 @@ async def get_balance_stats(session: AsyncSession) -> dict:
     
     # Использовали демо
     demo_used = await session.execute(
-        select(func.count(UserBalance.id)).where(UserBalance.demo_used == True)
+        select(func.count(UserBalance.id)).where(UserBalance.demo_used.is_(True))
     )
     
     # Купили хоть раз

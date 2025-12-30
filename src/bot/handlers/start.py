@@ -20,6 +20,7 @@ from src.bot.keyboards.inline import (
     get_back_to_menu_keyboard,
     get_start_with_history_keyboard,
     get_paywall_keyboard,
+    get_goal_keyboard,
 )
 from src.db import get_session
 from src.db.repositories import (
@@ -166,16 +167,54 @@ async def cmd_start(message: Message, state: FSMContext):
     
     # Выбираем клавиатуру
     if has_completed:
+        # Для опытных пользователей сразу даем выбор роли (пропускаем тизер)
         keyboard = get_start_with_history_keyboard(True, best_score)
+        
+        await message.answer(
+            get_welcome_text(user_first_name, balance_info),
+            reply_markup=keyboard,
+        )
+        await state.set_state(DiagnosticStates.choosing_role)
     else:
-        keyboard = get_role_keyboard()
+        # Для новых пользователей — Teaser + Micro-commitment
+        # 1. Отправляем тизер результата
+        await message.answer(TEASER_TEXT)
+        
+        # 2. Задаем вопрос о цели (Micro-commitment)
+        await message.answer(
+            get_goal_question_text(user_first_name),
+            reply_markup=get_goal_keyboard(),
+        )
+        await state.set_state(DiagnosticStates.choosing_goal)
+
+
+@router.callback_query(F.data.startswith("goal:"), DiagnosticStates.choosing_goal)
+async def process_goal(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора цели (Micro-commitment)."""
+    goal = callback.data.split(":")[1]
+    await state.update_data(user_goal=goal)
     
-    # Стандартный flow — персонализированное приветствие
-    await message.answer(
-        get_welcome_text(user_first_name, balance_info),
-        reply_markup=keyboard,
+    # Visual Role Selection (текстовая визуализация)
+    role_text = """
+🎯 <b>Цель принята!</b> Давай подберем программу под твой профиль.
+
+🎨 <b>Дизайнер</b>
+• Product Design, UI/UX, Research
+• Оценка визуального вкуса и эмпатии
+
+📊 <b>Продакт-менеджер</b>
+• Strategy, Metrics, Unit Economics
+• Оценка лидерства и системного мышления
+
+👇 <b>Кто ты?</b>
+"""
+    
+    await callback.message.edit_text(
+        role_text,
+        reply_markup=get_role_keyboard(),
     )
     await state.set_state(DiagnosticStates.choosing_role)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("role:"), DiagnosticStates.choosing_role)
@@ -197,60 +236,57 @@ async def process_role(callback: CallbackQuery, state: FSMContext):
 # === PROGRESSIVE ONBOARDING ===
 # Экран 1: Краткие правила + контекстная подсказка
 ONBOARDING_STEP1 = """
-📋 <b>Как проходит диагностика</b>
+👋 <b>Давай договоримся на берегу</b>
 
 ✅ Роль: <b>{role_name}</b>
 ✅ Опыт: <b>{exp_value}</b>
 {mode_info}
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>📝 3 простых правила:</b>
+<b>Как получить максимум от диагностики:</b>
 
-1️⃣ <b>Честность важнее "правильности"</b>
-   Нет плохих ответов — есть неточная диагностика.
+1️⃣ <b>Будь честным</b>
+Я здесь не чтобы осуждать, а чтобы подсветить точки роста.
 
-2️⃣ <b>Текст или голос</b>
-   Пиши текстом или отправляй голосовые.
+2️⃣ <b>Не стесняйся</b>
+Пиши как есть, или записывай голосовые — я их отлично понимаю.
 
-3️⃣ <b>Развёрнуто = точнее</b>
-   Чем больше деталей — тем точнее результат.
+3️⃣ <b>Детали — это золото</b>
+Чем подробнее расскажешь, тем точнее будет мой анализ.
 
 ━━━━━━━━━━━━━━━━━━━━
 
 {experience_tip}
 
-🎯 <b>Темы вопросов:</b> {question_topics}
+🎯 <b>О чем будем говорить:</b> {question_topics}
 
 ⏱️ <b>{questions_count} • {time_estimate}</b>
 """
 
 # Экран 2: Пример ответа
 ONBOARDING_STEP2 = """
-💡 <b>Пример хорошего ответа</b>
+💡 <b>Как отвечать круто?</b>
 
 <i>Вопрос: "Расскажи о сложном проекте"</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 
-❌ <b>Плохо:</b>
-<i>"Делал редизайн, было сложно, справился."</i>
+❌ <b>Так себе:</b>
+<i>"Делал редизайн, было сложно, но мы справились."</i>
+(Слишком общо, я не пойму твой вклад 🤷‍♂️)
 
 ━━━━━━━━━━━━━━━━━━━━
 
-✅ <b>Хорошо:</b>
-<i>"Редизайн B2B-портала для финтеха. 50k пользователей. 
-
-Главная сложность — 4 разных UI за 5 лет. 
-Провёл 12 интервью, нашёл топ-5 проблем. 
-Создал дизайн-систему. 
-
-Результат: время разработки -30%, NPS +15. 
-
-Ошибка — недооценил сопротивление команды."</i>
+✅ <b>Отлично:</b>
+<i>"Делал редизайн B2B-портала. Главная боль — 4 разных UI за 5 лет.
+Я провёл 12 интервью, нашёл проблемы и собрал единую дизайн-систему.
+В итоге: разработка ускорилась на 30%, а NPS вырос на 15."</i>
+(Есть контекст, действия и результат — супер! 🔥)
 
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>🎯 Формула:</b> Контекст → Действия → Результат → Выводы
+<b>Главный секрет:</b>
+Контекст → Что сделал ТЫ → Какой результат
 """
 
 # Сокращённый онбординг для возвращающихся
@@ -436,20 +472,7 @@ async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "onboarding_done", DiagnosticStates.onboarding)
-async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
-    """Пользователь прочитал онбординг — готов начать."""
-    data = await state.get_data()
-    
-    await callback.message.edit_text(
-        f"🚀 <b>Отлично!</b>\n\n"
-        f"Роль: {data['role_name']}\n"
-        f"Опыт: {data['experience_name']}\n\n"
-        f"Впереди 10 вопросов. Погнали!",
-        reply_markup=get_start_diagnostic_keyboard(),
-    )
-    await state.set_state(DiagnosticStates.ready_to_start)
-    await callback.answer()
+
 
 
 @router.callback_query(F.data == "skip_onboarding", DiagnosticStates.onboarding)
@@ -457,6 +480,7 @@ async def process_skip_onboarding(callback: CallbackQuery, state: FSMContext):
     """Пропуск онбординга для возвращающихся пользователей."""
     data = await state.get_data()
     
+    await state.set_state(DiagnosticStates.ready_to_start)
     await callback.message.edit_text(
         f"🚀 <b>Погнали!</b>\n\n"
         f"Роль: {data['role_name']}\n"
@@ -464,7 +488,6 @@ async def process_skip_onboarding(callback: CallbackQuery, state: FSMContext):
         f"10 вопросов ждут!",
         reply_markup=get_start_diagnostic_keyboard(),
     )
-    await state.set_state(DiagnosticStates.ready_to_start)
     await callback.answer()
 
 
@@ -505,11 +528,12 @@ async def process_restart(callback: CallbackQuery, state: FSMContext):
     if db_user_id:
         await state.update_data(db_user_id=db_user_id)
     
+    # Перезапуск — начинаем с выбора цели (но без тизера)
     await callback.message.edit_text(
-        WELCOME_TEXT,
-        reply_markup=get_role_keyboard(),
+        "🔄 <b>Перезапуск</b>\n\nДавай начнем сначала. Какая твоя главная цель сейчас?",
+        reply_markup=get_goal_keyboard(),
     )
-    await state.set_state(DiagnosticStates.choosing_role)
+    await state.set_state(DiagnosticStates.choosing_goal)
     await callback.answer()
 
 

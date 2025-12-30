@@ -1,7 +1,8 @@
 """
 Репозиторий для работы с PDP 2.0.
 """
-from datetime import datetime, timedelta
+
+from datetime import datetime
 from typing import Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from src.db.models import PdpPlan, PdpTask, PdpReminder, User
 
 
 # ==================== PDP PLANS ====================
+
 
 async def create_pdp_plan(
     session: AsyncSession,
@@ -41,6 +43,59 @@ async def create_pdp_plan(
     )
     session.add(plan)
     await session.flush()
+    return plan
+
+
+async def create_and_fill_pdp_plan(
+    session: AsyncSession,
+    user_id: int,
+    session_id: int,
+    focus_skills: list[str],
+    daily_time_minutes: int = 30,
+    learning_style: str = "mixed",
+) -> PdpPlan:
+    """Создать план и наполнить его задачами."""
+    from src.analytics.pdp_generator import generate_pdp_plan
+
+    # 1. Создаём план
+    plan = await create_pdp_plan(
+        session, user_id, session_id, focus_skills, daily_time_minutes, learning_style
+    )
+
+    # 2. Генерируем контент
+    pdp_content = generate_pdp_plan(focus_skills, daily_time_minutes, learning_style)
+
+    # 3. Сохраняем задачи
+    tasks_data = []
+    order = 1
+
+    for week in pdp_content.weeks:
+        for day, daily_tasks in week.days.items():
+            for task in daily_tasks:
+                tasks_data.append(
+                    {
+                        "week": week.week_number,
+                        "day": day,
+                        "order": order,
+                        "skill": task.skill,
+                        "skill_name": task.skill_name,
+                        "title": task.title,
+                        "description": task.description,
+                        "duration_minutes": task.duration_minutes,
+                        "task_type": task.task_type,
+                        "resource_type": task.resource_type,
+                        "resource_title": task.resource_title,
+                        "resource_url": task.resource_url,
+                        "status": "pending",
+                    }
+                )
+                order += 1
+
+    await add_tasks_batch(session, plan.id, tasks_data)
+
+    # Обновляем счетчик задач
+    await update_pdp_progress(session, plan.id, total_tasks=len(tasks_data))
+
     return plan
 
 
@@ -106,6 +161,7 @@ async def complete_pdp_plan(
 
 
 # ==================== PDP TASKS ====================
+
 
 async def add_pdp_task(
     session: AsyncSession,
@@ -237,18 +293,21 @@ async def get_today_task(
     plan = await get_pdp_plan_by_id(session, plan_id)
     if not plan:
         return None
-    
-    tasks = await get_tasks_for_day(session, plan_id, plan.current_week, plan.current_day)
-    
-    # Возвращаем первую pending задачу
+
+    tasks = await get_tasks_for_day(
+        session, plan_id, plan.current_week, plan.current_day
+    )
+
+    # Возвращаем первую незавершённую задачу (pending или sent)
     for task in tasks:
-        if task.status == "pending":
+        if task.status in ["pending", "sent"]:
             return task
-    
+
     return None
 
 
 # ==================== STREAKS & GAMIFICATION ====================
+
 
 async def update_streak(
     session: AsyncSession,
@@ -257,19 +316,24 @@ async def update_streak(
 ) -> dict:
     """
     Обновить streak и вернуть результат.
-    
+
     Returns:
         {"current_streak": int, "best_streak": int, "streak_broken": bool, "new_best": bool}
     """
     plan = await get_pdp_plan_by_id(session, plan_id)
     if not plan:
-        return {"current_streak": 0, "best_streak": 0, "streak_broken": False, "new_best": False}
-    
+        return {
+            "current_streak": 0,
+            "best_streak": 0,
+            "streak_broken": False,
+            "new_best": False,
+        }
+
     current = plan.current_streak
     best = plan.best_streak
     streak_broken = False
     new_best = False
-    
+
     if completed_today:
         current += 1
         if current > best:
@@ -279,13 +343,14 @@ async def update_streak(
         if current > 0:
             streak_broken = True
         current = 0
-    
+
     await update_pdp_progress(
-        session, plan_id,
+        session,
+        plan_id,
         current_streak=current,
         best_streak=best,
     )
-    
+
     return {
         "current_streak": current,
         "best_streak": best,
@@ -303,7 +368,7 @@ async def add_points(
     plan = await get_pdp_plan_by_id(session, plan_id)
     if not plan:
         return 0
-    
+
     new_total = plan.total_points + points
     await update_pdp_progress(session, plan_id, total_points=new_total)
     return new_total
@@ -317,28 +382,106 @@ async def add_badge(
 ) -> bool:
     """
     Добавить бейдж пользователю.
-    
+
     Returns:
         True если бейдж новый, False если уже был
     """
     plan = await get_pdp_plan_by_id(session, plan_id)
     if not plan:
         return False
-    
+
     badges = plan.badges or {}
     if badge_id in badges:
         return False
-    
+
     badges[badge_id] = {
         "name": badge_name,
         "earned_at": datetime.utcnow().isoformat(),
     }
-    
+
     await update_pdp_progress(session, plan_id, badges=badges)
     return True
 
 
+async def get_active_plans_for_daily_push(session: AsyncSession) -> list[PdpPlan]:
+    """
+    Получить активные планы пользователей с действующей подпиской.
+    """
+    from src.db.models import UserSubscription
+
+    now = datetime.utcnow()
+
+    stmt = (
+        select(PdpPlan)
+        .join(UserSubscription, PdpPlan.user_id == UserSubscription.user_id)
+        .where(PdpPlan.status == "active")
+        .where(UserSubscription.is_active.is_(True))
+        .where(UserSubscription.end_date > now)
+    )
+
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 # ==================== REMINDERS ====================
+
+
+async def process_daily_transition(
+    session: AsyncSession,
+    plan_id: int,
+    new_day: int,
+) -> None:
+    """
+    Обработать переход на новый день.
+
+    - Пропускает задачи прошлых дней
+    - Обновляет стрик
+    - Обновляет текущий день
+    """
+    plan = await get_pdp_plan_by_id(session, plan_id)
+    if not plan or plan.current_day >= new_day:
+        return
+
+    skipped_count = 0
+    streak_broken = False
+
+    # Проходим по всем дням, начиная с текущего записанного до (new_day - 1)
+    # Например, если было day=1, а стало day=3.
+    # Мы проверяем day=1 (вдруг вчера не зашел) и day=2 (пропустил).
+    # Но если day=1 был completed, то все ок.
+    # Если day=1 висит pending — значит пропустил.
+
+    for day in range(plan.current_day, new_day):
+        week = (day - 1) // 7 + 1
+        tasks = await get_tasks_for_day(session, plan_id, week, day)
+
+        day_has_tasks = len(tasks) > 0
+        day_completed = False
+
+        for task in tasks:
+            if task.status == "completed":
+                day_completed = True
+            elif task.status in ["pending", "sent"]:
+                # Автоматически пропускаем старые задачи
+                await skip_task(session, task.id, note="Auto-skipped by scheduler")
+                skipped_count += 1
+
+        # Если были задачи, но ни одна не выполнена — стрик сбрасывается
+        if day_has_tasks and not day_completed:
+            streak_broken = True
+
+    # Обновляем план
+    values = {
+        "current_day": new_day,
+        "current_week": (new_day - 1) // 7 + 1,
+        "skipped_tasks": plan.skipped_tasks + skipped_count,
+    }
+
+    if streak_broken:
+        values["current_streak"] = 0
+
+    await update_pdp_progress(session, plan_id, **values)
+
 
 async def get_or_create_reminder(
     session: AsyncSession,
@@ -348,7 +491,7 @@ async def get_or_create_reminder(
     stmt = select(PdpReminder).where(PdpReminder.user_id == user_id)
     result = await session.execute(stmt)
     reminder = result.scalar_one_or_none()
-    
+
     if not reminder:
         reminder = PdpReminder(
             user_id=user_id,
@@ -358,7 +501,7 @@ async def get_or_create_reminder(
         )
         session.add(reminder)
         await session.flush()
-    
+
     return reminder
 
 
@@ -377,12 +520,10 @@ async def update_reminder_settings(
         values["reminder_time"] = reminder_time
     if timezone is not None:
         values["timezone"] = timezone
-    
+
     if values:
         stmt = (
-            update(PdpReminder)
-            .where(PdpReminder.user_id == user_id)
-            .values(**values)
+            update(PdpReminder).where(PdpReminder.user_id == user_id).values(**values)
         )
         await session.execute(stmt)
 
@@ -394,25 +535,26 @@ async def get_users_for_reminder(
 ) -> list[int]:
     """
     Получить user_id для отправки напоминаний.
-    
+
     Возвращает telegram_id пользователей, которым нужно отправить напоминание.
     """
     time_str = f"{current_hour:02d}:{current_minute:02d}"
-    
+
     stmt = (
         select(User.telegram_id)
         .join(PdpReminder, PdpReminder.user_id == User.id)
         .join(PdpPlan, PdpPlan.user_id == User.id)
-        .where(PdpReminder.enabled == True)
+        .where(PdpReminder.enabled.is_(True))
         .where(PdpReminder.reminder_time == time_str)
         .where(PdpPlan.status == "active")
     )
-    
+
     result = await session.execute(stmt)
     return [row[0] for row in result.all()]
 
 
 # ==================== STATISTICS ====================
+
 
 async def get_pdp_stats(
     session: AsyncSession,
@@ -422,17 +564,17 @@ async def get_pdp_stats(
     plan = await get_pdp_plan_by_id(session, plan_id)
     if not plan:
         return {}
-    
+
     # Считаем задачи
     tasks = plan.tasks if plan.tasks else []
     completed = sum(1 for t in tasks if t.status == "completed")
     skipped = sum(1 for t in tasks if t.status == "skipped")
     pending = sum(1 for t in tasks if t.status == "pending")
     total = len(tasks)
-    
+
     # Процент выполнения
     completion_rate = (completed / total * 100) if total > 0 else 0
-    
+
     return {
         "total_tasks": total,
         "completed_tasks": completed,
@@ -446,4 +588,3 @@ async def get_pdp_stats(
         "total_points": plan.total_points,
         "badges_count": len(plan.badges) if plan.badges else 0,
     }
-

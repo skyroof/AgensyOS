@@ -7,6 +7,9 @@ from aiogram.fsm.state import State, StatesGroup
 class DiagnosticStates(StatesGroup):
     """Состояния процесса диагностики."""
     
+    # Micro-commitment (Step 0)
+    choosing_goal = State()
+    
     # Выбор параметров
     choosing_role = State()
     choosing_experience = State()
@@ -16,6 +19,9 @@ class DiagnosticStates(StatesGroup):
     
     # Подтверждение старта
     ready_to_start = State()
+    
+    # Запуск диагностики (анимация и генерация)
+    starting = State()
     
     # Восстановление незавершённой сессии
     session_recovery = State()

@@ -29,6 +29,7 @@ from src.payments.telegram_payments import (
     format_price,
 )
 from src.core.config import get_settings
+from src.core.prices import OTO_PACK3_PRICE
 from src.bot.keyboards.inline import (
     get_buy_keyboard,
     get_promo_input_keyboard,
@@ -98,6 +99,16 @@ async def show_pricing(message: Message, edit: bool = False):
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+⭐ <b>Карьерный Трекер</b>
+┃
+┃ 💰 <b>199 ₽ / мес</b>
+┃
+┣ ✅ Еженедельные задания (PDP)
+┣ ✅ Трекинг прогресса
+┗ ✅ Доступ к базе знаний
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 🎁 <b>Есть промокод?</b> Нажми кнопку ниже"""
 
     keyboard = get_buy_keyboard()
@@ -115,6 +126,22 @@ async def buy_callback(callback: CallbackQuery, state: FSMContext):
     """Обработка нажатия на кнопку покупки."""
     pack_type = callback.data.split(":")[1]
     
+    await process_purchase(callback, state, pack_type)
+
+
+@router.callback_query(F.data == "oto_buy:pack3")
+async def oto_buy_callback(callback: CallbackQuery, state: FSMContext):
+    """Обработка покупки OTO (Pack 3 со скидкой)."""
+    await process_purchase(callback, state, "pack3", override_price=OTO_PACK3_PRICE)
+
+
+async def process_purchase(
+    callback: CallbackQuery, 
+    state: FSMContext, 
+    pack_type: str, 
+    override_price: int | None = None
+):
+    """Общая логика покупки."""
     if pack_type not in PACK_PRICES:
         await callback.answer("Неизвестный пакет", show_alert=True)
         return
@@ -128,7 +155,7 @@ async def buy_callback(callback: CallbackQuery, state: FSMContext):
     
     async with get_session() as session:
         # Валидируем промокод если есть
-        if promo_code:
+        if promo_code and not override_price:
             valid, error, promo = await balance_repo.validate_promocode(
                 session, promo_code, pack_type, user_id
             )
@@ -140,6 +167,13 @@ async def buy_callback(callback: CallbackQuery, state: FSMContext):
         payment = await balance_repo.create_payment(
             session, user_id, pack_type, promo
         )
+        
+        # Если есть override_price (OTO), обновляем сумму платежа
+        if override_price:
+            payment.amount = override_price
+            payment.final_amount = override_price
+            payment.discount_amount = PACK_PRICES[pack_type] - override_price
+            await session.commit()
         
         # Если промокод 100% — сразу зачисляем без оплаты
         if payment.final_amount == 0:
@@ -186,11 +220,13 @@ async def buy_callback(callback: CallbackQuery, state: FSMContext):
             )
             await callback.answer()
             
-            # Удаляем сообщение с тарифами
-            try:
-                await callback.message.delete()
-            except Exception:
-                pass
+            # Удаляем сообщение с тарифами (если это обычное меню)
+            # Для OTO не удаляем, пусть висит пока пользователь думает
+            if not override_price:
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
                 
         except ValueError as e:
             logger.error(f"Payment error: {e}")
@@ -289,7 +325,7 @@ async def pre_checkout_handler(query: PreCheckoutQuery):
     payload = parse_invoice_payload(query.invoice_payload)
     
     if not payload:
-        await query.answer(ok=False, error_message="Ошибка данных платежа")
+        await query.answer(ok=False, error_message="Ошибка данных платежа. Попробуйте снова.")
         return
     
     # Проверяем что платёж существует
@@ -297,11 +333,11 @@ async def pre_checkout_handler(query: PreCheckoutQuery):
         payment = await balance_repo.get_payment(session, payload.get("payment_id"))
         
         if not payment:
-            await query.answer(ok=False, error_message="Платёж не найден")
+            await query.answer(ok=False, error_message="Платёж не найден. Начните покупку заново.")
             return
         
         if payment.status != "pending":
-            await query.answer(ok=False, error_message="Платёж уже обработан")
+            await query.answer(ok=False, error_message="Платёж уже обработан или отменен.")
             return
     
     # Всё ок, разрешаем оплату
@@ -360,6 +396,11 @@ async def successful_payment_handler(message: Message, state: FSMContext):
             commit=False
         )
         
+        # Если это подписка — активируем
+        if payment.pack_type == "subscription_1m":
+             from src.db.repositories.subscription_repo import activate_subscription
+             await activate_subscription(session, message.from_user.id, days=30)
+
         # Добавляем диагностики на баланс
         balance = await balance_repo.add_diagnostics(
             session, message.from_user.id, payment.diagnostics_count, payment.id, commit=False
@@ -379,6 +420,17 @@ async def successful_payment_handler(message: Message, state: FSMContext):
     # Очищаем state
     await state.clear()
     
+    # Если это подписка — шлем отдельное сообщение и выходим (или показываем другое)
+    if payment.pack_type == "subscription_1m":
+        text = f"""✅ <b>Подписка активирована!</b>
+
+💰 Оплачено: {format_price(payment.final_amount)}
+⭐ Доступ: 30 дней (PDP, трекинг, база знаний)
+
+Теперь тебе доступны еженедельные задания!"""
+        await message.answer(text, reply_markup=get_after_payment_keyboard())
+        return
+
     # Формируем сообщение
     pack_name = PACK_NAMES[payment.pack_type]
     count = payment.diagnostics_count

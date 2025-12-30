@@ -23,7 +23,11 @@ from src.bot.keyboards.inline import (
     get_delayed_feedback_keyboard,
     get_demo_result_keyboard,
     get_paywall_keyboard,
+    get_question_keyboard,
+    get_oto_keyboard,
+    get_after_share_keyboard,
 )
+from src.core.prices import SHARE_PROMO_CODE
 from src.db.repositories import balance_repo
 from src.ai.question_gen import generate_question
 from src.ai.cached_questions import get_cached_first_question
@@ -39,7 +43,7 @@ from src.ai.client import AIServiceError
 from src.analytics import build_profile, format_profile_text, get_benchmark, format_benchmark_text, build_pdp, format_pdp_text
 from src.db import get_session
 from src.db.repositories import save_answer, update_session_progress, complete_session, save_feedback, create_session
-from src.db.repositories.reminder_repo import schedule_stuck_reminder, cancel_stuck_reminders
+from src.db.repositories.reminder_repo import schedule_stuck_reminder, cancel_stuck_reminders, schedule_smart_reminder
 from src.utils.message_splitter import send_long_message, send_with_continuation
 
 router = Router(name="diagnostic")
@@ -62,6 +66,26 @@ async def safe_send_chat_action(bot: Bot, chat_id: int, action: ChatAction) -> N
         await bot.send_chat_action(chat_id, action)
     except Exception:
         pass  # Игнорируем ошибки (топики, форумы, etc)
+
+
+async def start_reminder(user_id: int, session_id: int):
+    """Запустить таймер напоминания (через БД)."""
+    try:
+        async with get_session() as db:
+            await schedule_stuck_reminder(db, user_id, session_id)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to schedule reminder: {e}")
+
+
+async def cancel_reminder(user_id: int, session_id: int):
+    """Отменить таймер напоминания."""
+    try:
+        async with get_session() as db:
+            await cancel_stuck_reminders(db, user_id, session_id)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to cancel reminder: {e}")
 
 
 def generate_progress_message(
@@ -291,8 +315,12 @@ async def cancel_reminder(user_id: int, session_id: int):
 @router.callback_query(F.data == "start_diagnostic", DiagnosticStates.ready_to_start)
 async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Начало диагностики — первый вопрос."""
+    # Сразу меняем состояние, чтобы избежать двойного клика
+    await state.set_state(DiagnosticStates.starting)
+    
     try:
         data = await state.get_data()
+
         user_id = callback.from_user.id
         
         # ==================== ПРОВЕРКА ДОСТУПА ====================
@@ -300,6 +328,9 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
             access = await balance_repo.check_diagnostic_access(db, user_id)
         
         if not access.allowed:
+            # Возвращаем состояние назад, если отказ
+            await state.set_state(DiagnosticStates.ready_to_start)
+            
             # Нет доступа — показываем paywall
             await callback.message.edit_text(
                 "🔒 <b>Нет доступных диагностик</b>\n\n"
@@ -325,6 +356,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
                 success = await balance_repo.use_diagnostic(db, user_id, diagnostic_mode, commit=False)
                 if not success:
                     # Если вдруг баланс изменился между проверкой и списанием
+                    await state.set_state(DiagnosticStates.ready_to_start)
                     await callback.answer("Ошибка доступа: баланс исчерпан", show_alert=True)
                     return
 
@@ -349,6 +381,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
                 
         except Exception as e:
             logger.error(f"Failed to create session in DB: {e}")
+            await state.set_state(DiagnosticStates.ready_to_start)
             await callback.answer("Ошибка базы данных. Попробуй позже.", show_alert=True)
             return
         
@@ -433,6 +466,8 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         
     except Exception as e:
         logger.error(f"Critical error in start_diagnostic: {e}", exc_info=True)
+        # В случае ошибки возвращаем состояние
+        await state.set_state(DiagnosticStates.ready_to_start)
         await callback.message.answer(
             "⚠️ <b>Произошла ошибка при запуске диагностики.</b>\n\n"
             "Пожалуйста, попробуй еще раз через минуту или начни заново /start"
@@ -616,6 +651,7 @@ async def edit_answer(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "pause_session", DiagnosticStates.confirming_answer)
+@router.callback_query(F.data == "pause_session", DiagnosticStates.answering)
 async def pause_session(callback: CallbackQuery, state: FSMContext):
     """Пауза диагностики — сохраняем и выходим."""
     from src.db import get_session
@@ -674,6 +710,84 @@ async def retry_analysis(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # Меняем callback_data и вызываем confirm_answer
     callback.data = "confirm_answer"
     await confirm_answer(callback, state, bot)
+
+
+@router.callback_query(F.data.startswith("share:"))
+async def share_callback(callback: CallbackQuery):
+    """Обработка кнопки 'Поделиться'."""
+    try:
+        session_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных", show_alert=True)
+        return
+
+    # Текст для шеринга
+    share_text = (
+        "Я прошел AI-диагностику компетенций и получил детальный разбор своих навыков! "
+        "Попробуй тоже: @DeepDiagnosticBot"
+    )
+    
+    # Ссылка для копирования
+    deep_link = f"https://t.me/share/url?url={share_text}"
+    
+    await callback.message.edit_text(
+        f"📤 <b>Поделись результатом!</b>\n\n"
+        f"Отправь этот текст друзьям или в чат:\n\n"
+        f"<code>{share_text}</code>\n\n"
+        f"🎁 <b>Твой бонус:</b>\n"
+        f"Как спасибо за шеринг, держи промокод на скидку 10%:\n"
+        f"<code>{SHARE_PROMO_CODE}</code>",
+        reply_markup=get_after_share_keyboard(session_id),
+    )
+    
+    # Убедимся, что промокод существует в БД (создаем лениво)
+    try:
+        async with get_session() as session:
+            # Проверяем наличие промокода
+            promo = await balance_repo.get_promocode(session, SHARE_PROMO_CODE)
+            if not promo:
+                await balance_repo.create_promocode(
+                    session,
+                    code=SHARE_PROMO_CODE,
+                    discount_percent=10,
+                    description="Бонус за шеринг",
+                    commit=True
+                )
+    except Exception as e:
+        logger.error(f"Failed to ensure share promo: {e}")
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("back_to_results:"))
+async def back_to_results_callback(callback: CallbackQuery):
+    """Вернуться к результатам после шеринга."""
+    try:
+        session_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных", show_alert=True)
+        return
+        
+    # Нужно восстановить контекст для генерации карточки
+    # Но у нас нет данных в FSM если сессия давно прошла.
+    # Поэтому просто показываем кнопки действий, или пробуем восстановить из БД.
+    # В MVP просто вернем меню с кнопками.
+    
+    keyboard = get_result_summary_keyboard(session_id)
+    
+    await callback.message.edit_text(
+        "📊 <b>Результаты диагностики</b>\n\n"
+        "Выбери действие:",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "delete_message")
+async def delete_message_callback(callback: CallbackQuery):
+    """Удалить сообщение."""
+    await callback.message.delete()
+    await callback.answer()
 
 
 @router.callback_query(F.data == "wait_more")
@@ -1137,6 +1251,15 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                                 focus_skill=focus_skill,
                                 days_delay=30,
                             )
+                            
+                            # Планируем Smart Reminder (24ч) - "Провокация"
+                            await schedule_smart_reminder(
+                                session=db,
+                                user_id=db_user_id,
+                                session_id=db_session_id,
+                                hours_delay=24,
+                            )
+                            
                             logger.info(f"Scheduled reminder for user {db_user_id} in 30 days")
                     except Exception as re:
                         logger.warning(f"Failed to schedule reminder: {re}")
@@ -1181,6 +1304,18 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 keyboard = get_restart_keyboard()
             
             await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
+            
+            # === ONE-TIME OFFER (OTO) ===
+            # Предлагаем скидку 30% на Pack 3 сразу после результата
+            await asyncio.sleep(2)
+            await callback.message.answer(
+                "🔥 <b>Специальное предложение!</b>\n\n"
+                "Только сейчас: пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n\n"
+                "Обычная цена: <s>699₽</s>\n"
+                "<b>Твоя цена: 490₽</b>\n\n"
+                "<i>Предложение действует 15 минут.</i>",
+                reply_markup=get_oto_keyboard(),
+            )
             
             # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
             asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
