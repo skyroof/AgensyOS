@@ -27,7 +27,7 @@ async def create_session(
         experience_name=experience_name,
         status="in_progress",
         current_question=1,
-        mode=mode,
+        diagnostic_mode=mode,
     )
     session.add(diagnostic_session)
     await session.commit()
