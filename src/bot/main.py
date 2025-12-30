@@ -40,11 +40,11 @@ async def send_admin_alert(bot, message: str):
 
 async def main():
     """Запуск бота."""
-    settings = get_settings()
+    config = get_settings()
     
     # Настройка логирования
     logging.basicConfig(
-        level=getattr(logging, settings.log_level),
+        level=getattr(logging, config.log_level),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         stream=sys.stdout,
     )
@@ -56,7 +56,7 @@ async def main():
     
     # Инициализация бота
     bot = Bot(
-        token=settings.bot_token,
+        token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     
@@ -80,8 +80,8 @@ async def main():
     
     # Запуск
     logger.info("🚀 Бот запускается...")
-    logger.info(f"📡 AI Provider: {settings.routerai_base_url}")
-    logger.info(f"🤖 AI Model: {settings.ai_model}")
+    logger.info(f"📡 AI Provider: {config.routerai_base_url}")
+    logger.info(f"🤖 AI Model: {config.ai_model}")
     
     # Запуск планировщика напоминаний
     scheduler_task = start_scheduler(bot)
