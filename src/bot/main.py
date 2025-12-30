@@ -80,8 +80,17 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     
-    # Диспетчер с хранилищем состояний в Redis
-    storage = RedisStorage.from_url(config.redis_url)
+    # Диспетчер с хранилищем состояний
+    try:
+        storage = RedisStorage.from_url(config.redis_url)
+        # Проверка соединения с Redis
+        await storage.redis.ping()
+        logger.info("✅ Подключено к Redis")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis недоступен ({e}), используется MemoryStorage. Состояния сбросятся при перезапуске.")
+        from aiogram.fsm.storage.memory import MemoryStorage
+        storage = MemoryStorage()
+
     dp = Dispatcher(storage=storage)
     
     # Регистрация middleware
