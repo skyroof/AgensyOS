@@ -1,0 +1,12 @@
+# Auto-detect text files and perform LF normalization
+* text=auto
+
+# Force bash scripts to always use LF endings
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Force docker files to use LF
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+.env text eol=lf
+env-example.txt text eol=lf

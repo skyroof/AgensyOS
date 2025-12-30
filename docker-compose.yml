@@ -14,8 +14,10 @@ services:
     volumes:
       - ./debug_logs:/app/debug_logs
     depends_on:
-      - redis
-      - db
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
