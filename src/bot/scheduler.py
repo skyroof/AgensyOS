@@ -14,7 +14,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from src.db.database import get_session
+from src.db import get_session
 from src.db.repositories.reminder_repo import (
     get_pending_reminders,
     mark_reminder_sent,

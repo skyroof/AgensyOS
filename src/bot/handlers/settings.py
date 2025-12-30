@@ -11,7 +11,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from src.db.database import get_session
+from src.db import get_session
 from src.db.repositories.user_repo import get_user_by_telegram_id
 from src.db.repositories.reminder_repo import (
     get_or_create_user_settings,

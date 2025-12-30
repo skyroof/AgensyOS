@@ -14,7 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from src.db.database import get_session
+from src.db import get_session
 from src.db.repositories.user_repo import get_user_by_telegram_id
 from src.db.repositories.diagnostic_repo import get_completed_sessions
 from src.db.repositories.pdp_repo import (
