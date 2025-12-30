@@ -1,5 +1,5 @@
 # Stage 1: Builder
-FROM python:3.11-slim as builder
+FROM public.ecr.aws/docker/library/python:3.11-slim as builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN mkdir -p /app/assets/fonts && \
     wget -q "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -O /app/assets/fonts/Montserrat-Bold.ttf
 
 # Stage 2: Final
-FROM python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 WORKDIR /app
 
