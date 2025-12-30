@@ -12,6 +12,9 @@ def get_role_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🎨 Дизайнер", callback_data="role:designer"),
         InlineKeyboardButton(text="📊 Продакт", callback_data="role:product"),
     )
+    builder.row(
+        InlineKeyboardButton(text="💳 Баланс / Купить", callback_data="buy_menu"),
+    )
     return builder.as_markup()
 
 
@@ -32,6 +35,9 @@ def get_start_with_history_keyboard(has_completed: bool = False, best_score: int
         builder.row(
             InlineKeyboardButton(text=history_text, callback_data="show_history"),
         )
+    builder.row(
+        InlineKeyboardButton(text="💳 Баланс / Купить", callback_data="buy_menu"),
+    )
     return builder.as_markup()
 
 

@@ -1,71 +1,23 @@
-# ============================================================
-# MAX Diagnostic Bot — Environment Variables
-# ============================================================
-# 
-# Скопируй этот файл в .env и заполни свои значения:
-#   cp env-example.txt .env
-#
-# ============================================================
-
-# --------------------------------------------------
-# 🤖 TELEGRAM BOT
-# --------------------------------------------------
-# Токен бота от @BotFather
-# Создать: https://t.me/BotFather → /newbot
-BOT_TOKEN=7123456789:AAHdqTcvCH8k...
-
-# --------------------------------------------------
-# 🧠 AI (RouterAI)
-# --------------------------------------------------
-# API ключ от RouterAI (единый API для Claude/GPT)
-# Регистрация: https://routerai.ru/
-# Преимущества: оплата в рублях, без VPN
-ROUTERAI_API_KEY=sk-...
-ROUTERAI_BASE_URL=https://routerai.ru/api/v1
-
-# Модель AI (рекомендуется Claude Sonnet 4.5)
-# Варианты: anthropic/claude-sonnet-4.5, openai/gpt-4-turbo, google/gemini-2.0-flash
-AI_MODEL=anthropic/claude-sonnet-4.5
-
-# --------------------------------------------------
-# 🗄️ DATABASE & REDIS
-# --------------------------------------------------
-# PostgreSQL URL (рекомендуется Supabase)
-# Формат: postgresql+asyncpg://user:password@host:port/database
-# Получить: https://supabase.com/ → Settings → Database → Connection string
-DATABASE_URL=postgresql+asyncpg://postgres.xxx:password@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
-
-# Redis (для Docker Compose не меняй, если запускаешь локально - redis://localhost:6379/0)
-# Если используешь внешний Redis (Upstash/Railway), вставь URL сюда.
-REDIS_URL=redis://redis:6379/0
-
-# --------------------------------------------------
-# 💳 PAYMENTS (ЮKassa через Telegram)
-# --------------------------------------------------
-# Токен провайдера платежей от @BotFather
-# Настройка: BotFather → /mybots → Bot → Payments → ЮKassa
-# Требуется регистрация на https://yookassa.ru/ и модерация
-PAYMENT_PROVIDER_TOKEN=381764678:TEST:...
-
-# Telegram ID админа для уведомлений о платежах и ошибках
-# Узнать свой ID: https://t.me/userinfobot
+# Telegram
+BOT_TOKEN=8246560915:AAHoRjwnPMJVutkahBynYHdNUiISjW_5A-4
 ADMIN_TELEGRAM_ID=785561885
 
-# --------------------------------------------------
-# ⚙️ APP SETTINGS
-# --------------------------------------------------
-# Режим отладки (true/false)
+# AI
+ROUTERAI_API_KEY=sk-CTyAfcfHMpbdZSsv6G5xFRbAfXgriUAj
+ROUTERAI_BASE_URL=https://routerai.ru/api/v1
+AI_MODEL=anthropic/claude-sonnet-4.5
+
+# Database
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/diagnostic_bot
+REDIS_URL=redis://localhost:6379/0
+
+# Payments
+PAYMENT_PROVIDER_TOKEN=CHANGE_ME
+
+# App
 DEBUG=false
-
-# Уровень логирования (DEBUG, INFO, WARNING, ERROR)
 LOG_LEVEL=INFO
+LOG_FORMAT=text
 
-# Формат логов (text - для разработки, json - для продакшена/ELK)
-LOG_FORMAT=json
-
-# --------------------------------------------------
-# 📊 MONITORING (опционально)
-# --------------------------------------------------
-# Sentry DSN для мониторинга ошибок
-# Получить: https://sentry.io/
-# SENTRY_DSN=https://xxx@xxx.ingest.sentry.io/xxx
+# Monitoring
+SENTRY_DSN=https://e1fcaa6128a4bde0ad242461c6058ab2@o4510615985061888.ingest.de.sentry.io/4510615988404304

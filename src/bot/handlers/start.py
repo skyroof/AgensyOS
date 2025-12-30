@@ -374,11 +374,27 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "onboarding_step2", DiagnosticStates.onboarding)
 async def process_onboarding_step2(callback: CallbackQuery, state: FSMContext):
-    """Переход к шагу 2 онбординга (пример ответа)."""
+    """Переход к шагу 2 онбординга."""
     await callback.message.edit_text(
         ONBOARDING_STEP2,
         reply_markup=get_onboarding_step2_keyboard(),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "onboarding_done", DiagnosticStates.onboarding)
+async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
+    """Завершение онбординга и переход к диагностике."""
+    data = await state.get_data()
+    
+    await callback.message.edit_text(
+        f"✅ <b>Всё готово!</b>\n\n"
+        f"Роль: {data.get('role_name', 'Не выбрана')}\n"
+        f"Опыт: {data.get('experience_name', 'Не выбран')}\n\n"
+        "Нажми кнопку ниже, чтобы получить первый вопрос.",
+        reply_markup=get_start_diagnostic_keyboard(),
+    )
+    await state.set_state(DiagnosticStates.ready_to_start)
     await callback.answer()
 
 

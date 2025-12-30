@@ -10,14 +10,12 @@ services:
     environment:
       - TZ=Europe/Moscow
       - REDIS_URL=redis://redis:6379/0
-      # Override if needed, but .env takes precedence for mapped files usually, 
-      # but explicit environment vars in compose override .env file content if conflicting? 
-      # Actually, env_file loads vars, environment overrides them. 
-      # So we set a safe default here for docker networking.
+      - DATABASE_URL=postgresql+asyncpg://user:password@db:5432/diagnostic_bot
     volumes:
       - ./debug_logs:/app/debug_logs
     depends_on:
       - redis
+      - db
 
   redis:
     image: redis:7-alpine
@@ -31,5 +29,22 @@ services:
       timeout: 3s
       retries: 5
 
+  db:
+    image: postgres:15-alpine
+    container_name: diagnostic-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: diagnostic_bot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d diagnostic_bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   redis_data:
+  postgres_data:

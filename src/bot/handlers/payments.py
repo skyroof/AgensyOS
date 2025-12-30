@@ -49,6 +49,13 @@ async def cmd_buy(message: Message, state: FSMContext):
     await show_pricing(message)
 
 
+@router.callback_query(F.data == "buy_menu")
+async def show_pricing_callback(callback: CallbackQuery):
+    """Обработка нажатия кнопки 'Купить / Баланс'."""
+    await show_pricing(callback.message, edit=True)
+    await callback.answer()
+
+
 async def show_pricing(message: Message, edit: bool = False):
     """Показать страницу с тарифами — красивое меню для ЮKassa."""
     text = """🎯 <b>Deep Diagnostic Bot</b>

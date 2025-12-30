@@ -291,144 +291,153 @@ async def cancel_reminder(user_id: int, session_id: int):
 @router.callback_query(F.data == "start_diagnostic", DiagnosticStates.ready_to_start)
 async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Начало диагностики — первый вопрос."""
-    data = await state.get_data()
-    user_id = callback.from_user.id
-    
-    # ==================== ПРОВЕРКА ДОСТУПА ====================
-    async with get_session() as db:
-        access = await balance_repo.check_diagnostic_access(db, user_id)
-    
-    if not access.allowed:
-        # Нет доступа — показываем paywall
-        await callback.message.edit_text(
-            "🔒 <b>Нет доступных диагностик</b>\n\n"
-            f"Баланс: {access.balance} диагностик\n"
-            f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
-            "Купи диагностику, чтобы продолжить!",
-            reply_markup=get_paywall_keyboard(),
-        )
-        await callback.answer("Нужна подписка", show_alert=True)
-        return
-    
-    # Определяем режим (demo или full)
-    diagnostic_mode = access.mode  # "demo" или "full"
-    total_questions = get_total_questions(diagnostic_mode)
-    
-    logger.info(f"[ACCESS] User {user_id}: mode={diagnostic_mode}, balance={access.balance}")
-    
-    # ==================== ТРАНЗАКЦИЯ: СПИСАНИЕ + СОЗДАНИЕ ====================
-    db_session_id = None
     try:
+        data = await state.get_data()
+        user_id = callback.from_user.id
+        
+        # ==================== ПРОВЕРКА ДОСТУПА ====================
         async with get_session() as db:
-            # 1. Списываем диагностику с баланса (без коммита)
-            success = await balance_repo.use_diagnostic(db, user_id, diagnostic_mode, commit=False)
-            if not success:
-                # Если вдруг баланс изменился между проверкой и списанием
-                await callback.answer("Ошибка доступа: баланс исчерпан", show_alert=True)
-                return
-
-            # 2. Создаем сессию (без коммита)
-            diagnostic_session = await create_session(
-                session=db,
-                user_id=user_id,
-                role=data["role"],
-                role_name=data["role_name"],
-                experience=data["experience"],
-                experience_name=data["experience_name"],
-                mode=diagnostic_mode,
-                commit=False,
+            access = await balance_repo.check_diagnostic_access(db, user_id)
+        
+        if not access.allowed:
+            # Нет доступа — показываем paywall
+            await callback.message.edit_text(
+                "🔒 <b>Нет доступных диагностик</b>\n\n"
+                f"Баланс: {access.balance} диагностик\n"
+                f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
+                "Купи диагностику, чтобы продолжить!",
+                reply_markup=get_paywall_keyboard(),
             )
-            
-            # 3. Фиксируем изменения
-            await db.commit()
-            await db.refresh(diagnostic_session)
-            db_session_id = diagnostic_session.id
-            
-            logger.info(f"Created {diagnostic_mode} session {db_session_id} for user {user_id}")
-            
-    except Exception as e:
-        logger.error(f"Failed to create session in DB: {e}")
-        await callback.answer("Ошибка базы данных", show_alert=True)
-        return
-    
-    await state.update_data(
-        current_question=1,
-        conversation_history=[],
-        analysis_history=[],
-        answer_stats=[],  # Статистика ответов для gamification
-        question_start_time=time.time(),  # Трекаем время на ответ
-        db_session_id=db_session_id,  # Сохраняем ID сессии
-        diagnostic_mode=diagnostic_mode,  # "demo" или "full"
-        total_questions=total_questions,  # 3 или 10
-    )
-    
-    # Пробуем взять первый вопрос из кэша (мгновенно!)
-    cached_question = get_cached_first_question(data["role"], data["experience"])
-    
-    if cached_question:
-        # Кэш найден — показываем быструю анимацию
-        loading_msg = await callback.message.edit_text(
-            "🚀 <b>Запускаю диагностику...</b>"
-        )
-        await asyncio.sleep(0.5)  # Минимальная задержка для UX
-        question = cached_question
-        logger.info(f"Using cached first question for {data['role']}/{data['experience']}")
-    else:
-        # Кэш не найден — генерируем через AI с анимацией
-        loading_msg = await callback.message.edit_text(
-            "🧠 <b>Подготавливаю диагностику...</b>\n\n<code>░░░░░░░░░░</code> 0%"
+            await callback.answer("Нужна подписка", show_alert=True)
+            return
+        
+        # Определяем режим (demo или full)
+        diagnostic_mode = access.mode  # "demo" или "full"
+        total_questions = get_total_questions(diagnostic_mode)
+        
+        logger.info(f"[ACCESS] User {user_id}: mode={diagnostic_mode}, balance={access.balance}")
+        
+        # ==================== ТРАНЗАКЦИЯ: СПИСАНИЕ + СОЗДАНИЕ ====================
+        db_session_id = None
+        try:
+            async with get_session() as db:
+                # 1. Списываем диагностику с баланса (без коммита)
+                success = await balance_repo.use_diagnostic(db, user_id, diagnostic_mode, commit=False)
+                if not success:
+                    # Если вдруг баланс изменился между проверкой и списанием
+                    await callback.answer("Ошибка доступа: баланс исчерпан", show_alert=True)
+                    return
+
+                # 2. Создаем сессию (без коммита)
+                diagnostic_session = await create_session(
+                    session=db,
+                    user_id=user_id,
+                    role=data["role"],
+                    role_name=data["role_name"],
+                    experience=data["experience"],
+                    experience_name=data["experience_name"],
+                    mode=diagnostic_mode,
+                    commit=False,
+                )
+                
+                # 3. Фиксируем изменения
+                await db.commit()
+                await db.refresh(diagnostic_session)
+                db_session_id = diagnostic_session.id
+                
+                logger.info(f"Created {diagnostic_mode} session {db_session_id} for user {user_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to create session in DB: {e}")
+            await callback.answer("Ошибка базы данных. Попробуй позже.", show_alert=True)
+            return
+        
+        await state.update_data(
+            current_question=1,
+            conversation_history=[],
+            analysis_history=[],
+            answer_stats=[],  # Статистика ответов для gamification
+            question_start_time=time.time(),  # Трекаем время на ответ
+            db_session_id=db_session_id,  # Сохраняем ID сессии
+            diagnostic_mode=diagnostic_mode,  # "demo" или "full"
+            total_questions=total_questions,  # 3 или 10
         )
         
-        async def animate_first_question():
-            states = [
-                ("▓▓░░░░░░░░", "20%", "Анализирую профиль..."),
-                ("▓▓▓▓░░░░░░", "40%", "Формирую стратегию..."),
-                ("▓▓▓▓▓▓░░░░", "60%", "Генерирую вопрос..."),
-                ("▓▓▓▓▓▓▓▓░░", "80%", "Оптимизирую..."),
-            ]
+        # Пробуем взять первый вопрос из кэша (мгновенно!)
+        cached_question = get_cached_first_question(data["role"], data["experience"])
+        
+        if cached_question:
+            # Кэш найден — показываем быструю анимацию
+            loading_msg = await callback.message.edit_text(
+                "🚀 <b>Запускаю диагностику...</b>"
+            )
+            await asyncio.sleep(0.5)  # Минимальная задержка для UX
+            question = cached_question
+            logger.info(f"Using cached first question for {data['role']}/{data['experience']}")
+        else:
+            # Кэш не найден — генерируем через AI с анимацией
+            loading_msg = await callback.message.edit_text(
+                "🧠 <b>Подготавливаю диагностику...</b>\n\n<code>░░░░░░░░░░</code> 0%"
+            )
+            
+            async def animate_first_question():
+                states = [
+                    ("▓▓░░░░░░░░", "20%", "Анализирую профиль..."),
+                    ("▓▓▓▓░░░░░░", "40%", "Формирую стратегию..."),
+                    ("▓▓▓▓▓▓░░░░", "60%", "Генерирую вопрос..."),
+                    ("▓▓▓▓▓▓▓▓░░", "80%", "Оптимизирую..."),
+                ]
+                try:
+                    for bar, pct, status in states:
+                        await asyncio.sleep(1.5)
+                        await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
+                        try:
+                            await loading_msg.edit_text(
+                                f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
+                            )
+                        except Exception:
+                            pass
+                except asyncio.CancelledError:
+                    pass
+            
+            anim_task = asyncio.create_task(animate_first_question())
+            
+            question = await generate_question(
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data["experience_name"],
+                question_number=1,
+                conversation_history=[],
+                analysis_history=[],
+            )
+            
+            anim_task.cancel()
             try:
-                for bar, pct, status in states:
-                    await asyncio.sleep(1.5)
-                    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
-                    try:
-                        await loading_msg.edit_text(
-                            f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
-                        )
-                    except Exception:
-                        pass
+                await anim_task
             except asyncio.CancelledError:
                 pass
         
-        anim_task = asyncio.create_task(animate_first_question())
+        await state.update_data(current_question_text=question)
         
-        question = await generate_question(
-            role=data["role"],
-            role_name=data["role_name"],
-            experience=data["experience_name"],
-            question_number=1,
-            conversation_history=[],
-            analysis_history=[],
+        # Для демо показываем другой текст
+        demo_note = "\n\n<i>🎁 Демо-версия: 3 вопроса</i>" if diagnostic_mode == "demo" else ""
+        
+        await callback.message.edit_text(
+            f"<b>Вопрос 1/{total_questions}</b>\n\n{question}{demo_note}",
         )
+        await state.set_state(DiagnosticStates.answering)
+        await callback.answer()
         
-        anim_task.cancel()
-        try:
-            await anim_task
-        except asyncio.CancelledError:
-            pass
-    
-    await state.update_data(current_question_text=question)
-    
-    # Для демо показываем другой текст
-    demo_note = "\n\n<i>🎁 Демо-версия: 3 вопроса</i>" if diagnostic_mode == "demo" else ""
-    
-    await callback.message.edit_text(
-        f"<b>Вопрос 1/{total_questions}</b>\n\n{question}{demo_note}",
-    )
-    await state.set_state(DiagnosticStates.answering)
-    await callback.answer()
-    
-    # Запускаем таймер напоминания
-    await start_reminder(user_id, db_session_id)
+        # Запускаем таймер напоминания
+        await start_reminder(user_id, db_session_id)
+        
+    except Exception as e:
+        logger.error(f"Critical error in start_diagnostic: {e}", exc_info=True)
+        await callback.message.answer(
+            "⚠️ <b>Произошла ошибка при запуске диагностики.</b>\n\n"
+            "Пожалуйста, попробуй еще раз через минуту или начни заново /start"
+        )
+        await callback.answer("Ошибка запуска", show_alert=True)
 
 
 MIN_ANSWER_LENGTH = 50  # Минимальная длина ответа (для точной оценки)

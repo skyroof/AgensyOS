@@ -1,10 +1,4 @@
-# ============================================================
-# MAX Diagnostic Bot — .gitignore
-# ============================================================
-
-# --------------------------------------------------
 # Python
-# --------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,96 +16,38 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual environments
+# Virtual Environment
 venv/
-.venv/
-ENV/
 env/
-
-# --------------------------------------------------
-# Environment & Secrets
-# --------------------------------------------------
+ENV/
 .env
-.env.local
-.env.*.local
-*.pem
-*.key
 
-# --------------------------------------------------
-# IDE & Editors
-# --------------------------------------------------
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
-*~
-.project
-.pydevproject
-.settings/
-*.sublime-workspace
-*.sublime-project
 
-# --------------------------------------------------
-# Database (local)
-# --------------------------------------------------
-*.db
-*.sqlite
-*.sqlite3
-
-# --------------------------------------------------
-# Logs & Debug
-# --------------------------------------------------
-*.log
+# Project
 logs/
 debug_logs/
+data/
+*.db
+*.sqlite3
 
-# --------------------------------------------------
-# OS
-# --------------------------------------------------
+# Docker
+docker-data/
+postgres_data/
+redis_data/
+
+# Mac
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-desktop.ini
 
-# --------------------------------------------------
-# Testing
-# --------------------------------------------------
-TEST/
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-
-# --------------------------------------------------
-# Build & Deploy
-# --------------------------------------------------
-*.tar
-*.tar.gz
-*.zip
-bot.tar
-
-# --------------------------------------------------
-# Generated files (keep in .gitignore for clean repo)
-# --------------------------------------------------
-# Раскомментируй если хочешь игнорировать:
-# test_*.pdf
-# test_*.png
-# *.pdf
-# *.png
-
-# --------------------------------------------------
-# Project-specific
-# --------------------------------------------------
-# Локальные тестовые файлы
-test_report.pdf
-test_share_card.png
-photo_*.jpg
+# Secrets (Risk management)
+env-example.txt
