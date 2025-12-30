@@ -19,7 +19,10 @@ fi
 
 # 3. Build and restart containers
 echo "🏗️ Building and restarting containers..."
-docker-compose down
+docker-compose down --remove-orphans
+# Force remove containers to prevent name conflicts
+docker rm -f diagnostic-bot diagnostic-redis diagnostic-db || true
+
 docker-compose build --no-cache
 docker-compose up -d
 
