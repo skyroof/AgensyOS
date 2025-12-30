@@ -1,0 +1,137 @@
+# Правила проекта MAX Diagnostic Bot
+
+## 🎯 О проекте
+
+Telegram-бот для AI-диагностики дизайнеров и продакт-менеджеров.
+
+**Стек:**
+- Python 3.11+
+- aiogram 3.x (async Telegram Bot API)
+- SQLAlchemy 2.0 (async ORM)
+- PostgreSQL (Supabase)
+- RouterAI (Claude/GPT API)
+
+---
+
+## 📁 Структура
+
+```
+src/
+├── ai/           # AI-клиент и генераторы
+├── analytics/    # Аналитика, PDP, динамика
+├── bot/          # Telegram бот
+│   ├── handlers/ # Обработчики команд
+│   ├── keyboards/# Inline клавиатуры
+│   └── middlewares/
+├── core/         # Конфигурация, промпты
+├── db/           # ORM модели и репозитории
+├── payments/     # Telegram Payments API
+└── utils/        # PDF, сплиттер сообщений
+```
+
+---
+
+## 🔧 Правила разработки
+
+### Общие
+
+1. **Язык комментариев:** русский
+2. **Код:** английский (переменные, функции)
+3. **Тип-хинты:** обязательны везде
+4. **Async:** весь код асинхронный
+
+### Стиль
+
+```python
+# ✅ Хорошо
+async def get_user_balance(session: AsyncSession, user_id: int) -> UserBalance:
+    """Получить баланс пользователя."""
+    ...
+
+# ❌ Плохо
+def getBalance(s, uid):
+    ...
+```
+
+### Импорты
+
+```python
+# Порядок:
+# 1. stdlib
+# 2. third-party
+# 3. local (src.*)
+
+import logging
+from datetime import datetime
+
+from aiogram import Router, F
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.db import get_session
+from src.db.repositories import balance_repo
+```
+
+### Обработчики (handlers)
+
+```python
+@router.callback_query(F.data == "action_name", SomeState.state_name)
+async def handle_action(callback: CallbackQuery, state: FSMContext):
+    """Краткое описание что делает."""
+    user_id = callback.from_user.id
+    
+    # Логика
+    async with get_session() as db:
+        ...
+    
+    await callback.answer()
+```
+
+### Базы данных
+
+- Используй `async with get_session() as db:` для транзакций
+- Репозитории в `src/db/repositories/`
+- Модели в `src/db/models.py`
+
+### Telegram Messages
+
+- Лимит: 4096 символов
+- Для длинных сообщений: `send_long_message()` из `utils/message_splitter.py`
+- HTML parse_mode (не Markdown)
+
+---
+
+## ⚠️ Важно
+
+### Зарезервированные слова PostgreSQL
+
+НЕ использовать как имена колонок:
+- `mode`, `user`, `table`, `order`, `group`, `limit`
+
+Если нужно — используй `diagnostic_mode` вместо `mode`.
+
+### Переменные окружения
+
+Все настройки в `src/core/config.py` через Pydantic Settings.
+Не хардкодить токены и ключи!
+
+### Деплой
+
+```bash
+# На сервере
+cd /root/bot
+git pull
+docker compose down
+docker compose up -d --build
+docker logs diagnostic-bot --tail 30
+```
+
+---
+
+## 📝 Чеклист перед коммитом
+
+- [ ] Нет хардкода токенов/ключей
+- [ ] Тип-хинты везде
+- [ ] Docstrings для публичных функций
+- [ ] Логирование важных действий
+- [ ] Обработка ошибок (try/except)
+- [ ] Тестирование команд бота

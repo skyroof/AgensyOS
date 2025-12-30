@@ -1,30 +1,67 @@
-# ========================================
-# Deep Diagnostic Bot — Environment Variables
-# ========================================
-# Скопируй в .env и заполни свои значения
+# ============================================================
+# MAX Diagnostic Bot — Environment Variables
+# ============================================================
+# 
+# Скопируй этот файл в .env и заполни свои значения:
+#   cp env-example.txt .env
+#
+# ============================================================
 
-# Telegram Bot Token (получить у @BotFather)
-BOT_TOKEN=your_telegram_bot_token
+# --------------------------------------------------
+# 🤖 TELEGRAM BOT
+# --------------------------------------------------
+# Токен бота от @BotFather
+# Создать: https://t.me/BotFather → /newbot
+BOT_TOKEN=7123456789:AAHdqTcvCH8k...
 
-# RouterAI (https://routerai.ru/)
-ROUTERAI_API_KEY=your_routerai_api_key
+# --------------------------------------------------
+# 🧠 AI (RouterAI)
+# --------------------------------------------------
+# API ключ от RouterAI (единый API для Claude/GPT)
+# Регистрация: https://routerai.ru/
+# Преимущества: оплата в рублях, без VPN
+ROUTERAI_API_KEY=sk-...
 ROUTERAI_BASE_URL=https://routerai.ru/api/v1
 
-# AI Model
+# Модель AI (рекомендуется Claude Sonnet 4.5)
+# Варианты: anthropic/claude-sonnet-4.5, openai/gpt-4-turbo, google/gemini-1.5-pro
 AI_MODEL=anthropic/claude-sonnet-4.5
 
-# Database (оставь пустым для SQLite или укажи PostgreSQL)
-# DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
+# --------------------------------------------------
+# 🗄️ DATABASE
+# --------------------------------------------------
+# PostgreSQL URL (рекомендуется Supabase)
+# Формат: postgresql+asyncpg://user:password@host:port/database
+# Получить: https://supabase.com/ → Settings → Database → Connection string
+DATABASE_URL=postgresql+asyncpg://postgres.xxx:password@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
 
-# App
+# Или SQLite для локальной разработки (оставь пустым DATABASE_URL):
+# DATABASE_URL=
+
+# --------------------------------------------------
+# 💳 PAYMENTS (ЮKassa через Telegram)
+# --------------------------------------------------
+# Токен провайдера платежей от @BotFather
+# Настройка: BotFather → /mybots → Bot → Payments → ЮKassa
+# Требуется регистрация на https://yookassa.ru/ и модерация
+PAYMENT_PROVIDER_TOKEN=381764678:TEST:...
+
+# Telegram ID админа для уведомлений о платежах
+# Узнать свой ID: https://t.me/userinfobot
+ADMIN_TELEGRAM_ID=785561885
+
+# --------------------------------------------------
+# ⚙️ APP SETTINGS
+# --------------------------------------------------
+# Режим отладки (true/false)
 DEBUG=false
+
+# Уровень логирования (DEBUG, INFO, WARNING, ERROR)
 LOG_LEVEL=INFO
 
-# Payments (ЮKassa через Telegram Payments API)
-# Получить токен: @BotFather → /mybots → Bot Settings → Payments → ЮKassa
-# Требуется регистрация на yookassa.ru и прохождение модерации
-PAYMENT_PROVIDER_TOKEN=your_yookassa_payment_token
-
-# Админ для уведомлений о платежах (Telegram user ID)
-ADMIN_TELEGRAM_ID=123456789
-
+# --------------------------------------------------
+# 📊 MONITORING (опционально)
+# --------------------------------------------------
+# Sentry DSN для мониторинга ошибок
+# Получить: https://sentry.io/
+# SENTRY_DSN=https://xxx@xxx.ingest.sentry.io/xxx
