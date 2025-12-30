@@ -16,6 +16,7 @@ async def create_session(
     role_name: str,
     experience: str,
     experience_name: str,
+    mode: str = "full",  # "demo" (3 вопроса) или "full" (10 вопросов)
 ) -> DiagnosticSession:
     """Создать новую сессию диагностики."""
     diagnostic_session = DiagnosticSession(
@@ -26,6 +27,7 @@ async def create_session(
         experience_name=experience_name,
         status="in_progress",
         current_question=1,
+        mode=mode,
     )
     session.add(diagnostic_session)
     await session.commit()
@@ -193,4 +195,69 @@ async def get_average_rating(session: AsyncSession) -> float | None:
     stmt = select(func.avg(Feedback.rating))
     result = await session.execute(stmt)
     return result.scalar()
+
+
+async def get_completed_sessions(
+    session: AsyncSession,
+    user_id: int,
+    limit: int = 10,
+) -> list[DiagnosticSession]:
+    """
+    Получить ЗАВЕРШЁННЫЕ сессии пользователя для истории.
+    
+    Отсортированы по дате завершения (новые первые).
+    """
+    stmt = (
+        select(DiagnosticSession)
+        .where(DiagnosticSession.user_id == user_id)
+        .where(DiagnosticSession.status == "completed")
+        .where(DiagnosticSession.total_score.is_not(None))
+        .order_by(DiagnosticSession.completed_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_user_stats(
+    session: AsyncSession,
+    user_id: int,
+) -> dict:
+    """
+    Получить статистику пользователя: количество диагностик, лучший балл и т.д.
+    """
+    from sqlalchemy import func
+    
+    # Количество завершённых сессий
+    count_stmt = (
+        select(func.count(DiagnosticSession.id))
+        .where(DiagnosticSession.user_id == user_id)
+        .where(DiagnosticSession.status == "completed")
+    )
+    count_result = await session.execute(count_stmt)
+    total_count = count_result.scalar() or 0
+    
+    # Лучший балл
+    best_stmt = (
+        select(func.max(DiagnosticSession.total_score))
+        .where(DiagnosticSession.user_id == user_id)
+        .where(DiagnosticSession.status == "completed")
+    )
+    best_result = await session.execute(best_stmt)
+    best_score = best_result.scalar()
+    
+    # Средний балл
+    avg_stmt = (
+        select(func.avg(DiagnosticSession.total_score))
+        .where(DiagnosticSession.user_id == user_id)
+        .where(DiagnosticSession.status == "completed")
+    )
+    avg_result = await session.execute(avg_stmt)
+    avg_score = avg_result.scalar()
+    
+    return {
+        "total_diagnostics": total_count,
+        "best_score": best_score,
+        "average_score": round(avg_score, 1) if avg_score else None,
+    }
 

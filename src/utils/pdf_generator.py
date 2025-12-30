@@ -1631,15 +1631,25 @@ def generate_pdf_report(
     if pdp_data:
         elements.append(PageBreak())
         
-        # Заголовок с иконкой
+        # Заголовок с акцентом
         pdp_title_style = ParagraphStyle(
             'PDPTitle',
             fontName=FONT_BOLD,
-            fontSize=16,
+            fontSize=18,
             textColor=Colors.PRIMARY,
-            spaceAfter=5,
+            spaceAfter=3,
         )
-        elements.append(Paragraph("ПЛАН РАЗВИТИЯ НА 30 ДНЕЙ", pdp_title_style))
+        elements.append(Paragraph("🎯 ПЛАН РАЗВИТИЯ", pdp_title_style))
+        
+        # Подзаголовок с временем
+        pdp_subtitle_style = ParagraphStyle(
+            'PDPSubtitle',
+            fontName=FONT_BOLD,
+            fontSize=12,
+            textColor=Colors.ACCENT,
+            spaceAfter=8,
+        )
+        elements.append(Paragraph("30 ДНЕЙ • 4 НЕДЕЛИ • КОНКРЕТНЫЕ ДЕЙСТВИЯ", pdp_subtitle_style))
         
         # Подзаголовок
         pdp_intro_style = ParagraphStyle(
@@ -1647,26 +1657,40 @@ def generate_pdf_report(
             fontName=FONT_NAME,
             fontSize=9,
             textColor=Colors.TEXT_SECONDARY,
-            spaceAfter=10,
+            spaceAfter=12,
         )
         elements.append(Paragraph(
             "Персональный план действий на основе результатов диагностики",
             pdp_intro_style
         ))
         
-        # Главный фокус (карточка)
+        # Главный фокус (карточка с рамкой)
         main_focus = pdp_data.get("main_focus", "")
         if main_focus:
-            focus_style = ParagraphStyle(
-                'FocusCard',
-                fontName=FONT_SEMIBOLD,
-                fontSize=10,
-                textColor=Colors.TEXT_PRIMARY,
-                backColor=Colors.LIGHT_BG,
-                borderPadding=(8, 10, 8, 10),
-                spaceAfter=10,
+            # Создаём таблицу-карточку для фокуса
+            focus_content = Paragraph(
+                f'<b>ГЛАВНЫЙ ФОКУС:</b> {main_focus}',
+                ParagraphStyle(
+                    'FocusText',
+                    fontName=FONT_SEMIBOLD,
+                    fontSize=11,
+                    textColor=Colors.PRIMARY,
+                )
             )
-            elements.append(Paragraph(f'<b>Главный фокус:</b> {main_focus}', focus_style))
+            focus_table = Table(
+                [[focus_content]],
+                colWidths=[175*mm],
+            )
+            focus_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), Colors.LIGHT_BG),
+                ('BOX', (0, 0), (-1, -1), 1.5, Colors.ACCENT),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ]))
+            elements.append(focus_table)
+            elements.append(Spacer(1, 8*mm))
         
         elements.append(SectionDivider(width=180*mm, style="line"))
         
@@ -1817,14 +1841,58 @@ def generate_pdf_report(
             metric_style = ParagraphStyle(
                 'SuccessMetric',
                 fontName=FONT_NAME,
-                fontSize=8,
+                fontSize=9,
                 textColor=Colors.EXCELLENT,
                 leftIndent=5,
-                spaceAfter=2,
+                spaceAfter=3,
             )
             for item in success_metrics[:4]:
                 clean_item = item.lstrip("[]▸• ")
                 elements.append(Paragraph(f'✓ {clean_item}', metric_style))
+        
+        elements.append(Spacer(1, 8*mm))
+        
+        # Мотивационный блок в конце
+        motivation_msg = pdp_data.get("motivation_message", "")
+        if motivation_msg:
+            # Очищаем от эмодзи в начале
+            clean_motivation = motivation_msg.lstrip("🚀💪🎯👑 ")
+            
+            motivation_content = Paragraph(
+                f'<i>"{clean_motivation}"</i>',
+                ParagraphStyle(
+                    'MotivationText',
+                    fontName=FONT_NAME,
+                    fontSize=10,
+                    textColor=Colors.TEXT_PRIMARY,
+                    alignment=TA_CENTER,
+                )
+            )
+            motivation_table = Table(
+                [[motivation_content]],
+                colWidths=[160*mm],
+            )
+            motivation_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), Colors.LIGHT_BG),
+                ('BOX', (0, 0), (-1, -1), 0.5, Colors.BORDER),
+                ('LEFTPADDING', (0, 0), (-1, -1), 15),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 15),
+                ('TOPPADDING', (0, 0), (-1, -1), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            elements.append(motivation_table)
+        
+        # Призыв к действию
+        elements.append(Spacer(1, 5*mm))
+        cta_style = ParagraphStyle(
+            'PDPCallToAction',
+            fontName=FONT_SEMIBOLD,
+            fontSize=9,
+            textColor=Colors.ACCENT,
+            alignment=TA_CENTER,
+        )
+        elements.append(Paragraph("Начни с первого действия сегодня! Пройди повторную диагностику через 30 дней.", cta_style))
     
     # ========================================
     # СТРАНИЦА: BENCHMARK — Сравнение с рынком (S8)

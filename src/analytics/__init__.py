@@ -24,6 +24,23 @@ from src.analytics.pdp import (
     format_pdp_text,
     format_pdp_short,
 )
+from src.analytics.dynamics import (
+    UserDynamics,
+    DynamicsResult,
+    SessionSummary,
+    calculate_user_dynamics,
+    calculate_dynamics,
+    format_dynamics_text,
+    format_session_card,
+)
+from src.analytics.pdp_generator import (
+    PdpPlan30,
+    DailyTask,
+    WeekPlan,
+    generate_pdp_plan,
+    format_pdp_plan_text,
+    format_today_task,
+)
 
 __all__ = [
     # Профиль компетенций
@@ -47,6 +64,21 @@ __all__ = [
     "build_pdp",
     "format_pdp_text",
     "format_pdp_short",
+    # Динамика развития
+    "UserDynamics",
+    "DynamicsResult",
+    "SessionSummary",
+    "calculate_user_dynamics",
+    "calculate_dynamics",
+    "format_dynamics_text",
+    "format_session_card",
+    # PDP 2.0 Generator
+    "PdpPlan30",
+    "DailyTask",
+    "WeekPlan",
+    "generate_pdp_plan",
+    "format_pdp_plan_text",
+    "format_today_task",
 ]
 
 

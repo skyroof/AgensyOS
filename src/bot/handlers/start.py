@@ -18,6 +18,7 @@ from src.bot.keyboards.inline import (
     get_returning_user_keyboard,
     get_session_recovery_keyboard,
     get_back_to_menu_keyboard,
+    get_start_with_history_keyboard,
 )
 from src.db import get_session
 from src.db.repositories import (
@@ -25,6 +26,8 @@ from src.db.repositories import (
     create_session as create_db_session,
     get_active_session,
     get_user_sessions,
+    get_completed_sessions,
+    get_user_stats,
 )
 
 router = Router(name="start")
@@ -135,10 +138,29 @@ async def cmd_start(message: Message, state: FSMContext):
             await state.set_state(DiagnosticStates.session_recovery)
             return
     
+    # Проверяем, есть ли у пользователя завершённые диагностики
+    has_completed = False
+    best_score = None
+    
+    if db_user_id:
+        try:
+            async with get_session() as db:
+                stats = await get_user_stats(db, db_user_id)
+                has_completed = stats["total_diagnostics"] > 0
+                best_score = stats["best_score"]
+        except Exception as e:
+            logger.warning(f"Failed to get user stats: {e}")
+    
+    # Выбираем клавиатуру
+    if has_completed:
+        keyboard = get_start_with_history_keyboard(True, best_score)
+    else:
+        keyboard = get_role_keyboard()
+    
     # Стандартный flow — персонализированное приветствие
     await message.answer(
         get_welcome_text(user_first_name),
-        reply_markup=get_role_keyboard(),
+        reply_markup=keyboard,
     )
     await state.set_state(DiagnosticStates.choosing_role)
 

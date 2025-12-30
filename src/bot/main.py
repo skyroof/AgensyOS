@@ -20,9 +20,10 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from src.core.config import get_settings
-from src.bot.handlers import start, diagnostic, history, voice
+from src.bot.handlers import start, diagnostic, history, voice, pdp, settings, payments
 from src.bot.middlewares.error_handler import ErrorHandlerMiddleware
 from src.bot.middlewares.logging_middleware import LoggingMiddleware
+from src.bot.scheduler import start_scheduler
 from src.db import init_db, close_db
 
 
@@ -70,7 +71,10 @@ async def main():
     
     # Регистрация роутеров (порядок важен!)
     dp.include_router(start.router)
+    dp.include_router(payments.router)  # Платежи (до diagnostic!)
     dp.include_router(history.router)
+    dp.include_router(pdp.router)  # PDP 2.0
+    dp.include_router(settings.router)  # Настройки и напоминания
     dp.include_router(voice.router)  # Голосовые до diagnostic (для фильтрации)
     dp.include_router(diagnostic.router)
     
@@ -78,6 +82,10 @@ async def main():
     logger.info("🚀 Бот запускается...")
     logger.info(f"📡 AI Provider: {settings.routerai_base_url}")
     logger.info(f"🤖 AI Model: {settings.ai_model}")
+    
+    # Запуск планировщика напоминаний
+    scheduler_task = start_scheduler(bot)
+    logger.info("⏰ Планировщик напоминаний запущен")
     
     try:
         # Алерт о запуске
@@ -89,6 +97,7 @@ async def main():
         raise
     finally:
         logger.info("🛑 Бот останавливается...")
+        scheduler_task.cancel()  # Останавливаем планировщик
         await send_admin_alert(bot, "🛑 Бот остановлен")
         await close_db()
         await bot.session.close()

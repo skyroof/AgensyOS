@@ -42,6 +42,18 @@ class Settings(BaseSettings):
     # App
     debug: bool = Field(default=False, description="Debug mode")
     log_level: str = Field(default="INFO", description="Logging level")
+    
+    # Payments (Telegram Payments API)
+    payment_provider_token: str = Field(
+        default="",
+        description="Payment provider token from @BotFather"
+    )
+    
+    # Admin
+    admin_telegram_id: int = Field(
+        default=0,
+        description="Admin Telegram user ID for notifications"
+    )
 
 
 @lru_cache

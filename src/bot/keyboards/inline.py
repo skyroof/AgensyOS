@@ -15,6 +15,26 @@ def get_role_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_start_with_history_keyboard(has_completed: bool = False, best_score: int | None = None) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора роли с дополнительной кнопкой истории.
+    Показывается пользователям с завершёнными диагностиками.
+    """
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🎨 Дизайнер", callback_data="role:designer"),
+        InlineKeyboardButton(text="📊 Продакт", callback_data="role:product"),
+    )
+    if has_completed:
+        history_text = "📊 Мои результаты"
+        if best_score:
+            history_text = f"📊 Мои результаты ({best_score}/100)"
+        builder.row(
+            InlineKeyboardButton(text=history_text, callback_data="show_history"),
+        )
+    return builder.as_markup()
+
+
 def get_experience_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура выбора опыта."""
     builder = InlineKeyboardBuilder()
@@ -252,5 +272,123 @@ def get_after_share_keyboard(session_id: int) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="🔄 Пройти снова", callback_data="restart"),
         InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu"),
+    )
+    return builder.as_markup()
+
+
+def get_history_keyboard(last_session_id: int | None = None) -> InlineKeyboardMarkup:
+    """Клавиатура для истории диагностик."""
+    builder = InlineKeyboardBuilder()
+    
+    if last_session_id:
+        # Кнопка для просмотра последней диагностики
+        builder.row(
+            InlineKeyboardButton(text="📋 Последний результат", callback_data=f"back_to_results:{last_session_id}"),
+            InlineKeyboardButton(text="📄 PDF", callback_data=f"pdf:{last_session_id}"),
+        )
+    
+    builder.row(
+        InlineKeyboardButton(text="🔄 Новая диагностика", callback_data="restart"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+    )
+    return builder.as_markup()
+
+
+def get_compare_sessions_keyboard(session1_id: int, session2_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для сравнения двух сессий."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📋 Сессия 1", callback_data=f"back_to_results:{session1_id}"),
+        InlineKeyboardButton(text="📋 Сессия 2", callback_data=f"back_to_results:{session2_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ К истории", callback_data="show_history"),
+    )
+    return builder.as_markup()
+
+
+# ==================== ПЛАТЕЖИ ====================
+
+def get_buy_keyboard(show_promo_applied: bool = False) -> InlineKeyboardMarkup:
+    """Клавиатура с тарифами для покупки — красивые кнопки с ценами."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🛒 Купить 1 диагностику • 299 ₽", callback_data="buy:single"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📦 Пакет 3 шт • 699 ₽", callback_data="buy:pack3"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📦 Пакет 10 шт • 1 990 ₽", callback_data="buy:pack10"),
+    )
+    if show_promo_applied:
+        builder.row(
+            InlineKeyboardButton(text="✅ Промокод применён", callback_data="noop"),
+        )
+    else:
+        builder.row(
+            InlineKeyboardButton(text="🎁 У меня есть промокод", callback_data="enter_promo"),
+        )
+    return builder.as_markup()
+
+
+def get_promo_input_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура при вводе промокода."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад к тарифам", callback_data="back_to_pricing"),
+    )
+    return builder.as_markup()
+
+
+def get_after_payment_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура после успешной оплаты."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🎯 Начать диагностику", callback_data="restart"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📊 Мой баланс", callback_data="show_balance"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+    )
+    return builder.as_markup()
+
+
+def get_paywall_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура paywall — нет доступа."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔓 Открыть полную версию — 299₽", callback_data="buy:single"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📦 Все тарифы", callback_data="show_pricing"),
+        InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo"),
+    )
+    return builder.as_markup()
+
+
+def get_balance_keyboard(has_balance: bool = False) -> InlineKeyboardMarkup:
+    """Клавиатура для страницы баланса."""
+    builder = InlineKeyboardBuilder()
+    if has_balance:
+        builder.row(
+            InlineKeyboardButton(text="🎯 Начать диагностику", callback_data="restart"),
+        )
+    builder.row(
+        InlineKeyboardButton(text="💰 Пополнить", callback_data="show_pricing"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+    )
+    return builder.as_markup()
+
+
+def get_demo_result_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура после демо-диагностики — агрессивный CTA."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔓 Открыть все 12 метрик — 299₽", callback_data="buy:single"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📦 Другие тарифы", callback_data="show_pricing"),
+        InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo"),
     )
     return builder.as_markup()

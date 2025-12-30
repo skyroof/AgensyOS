@@ -2,23 +2,32 @@
 Обработчик команды /history — просмотр прошлых диагностик.
 """
 import logging
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.filters import Command
 
 from src.db import get_session
-from src.db.repositories import get_user_by_telegram_id, get_user_sessions, get_session_by_id
+from src.db.repositories import (
+    get_user_by_telegram_id, 
+    get_user_sessions, 
+    get_session_by_id,
+    get_completed_sessions,
+    get_user_stats,
+)
 from src.utils.pdf_generator import generate_pdf_report
+from src.utils.message_splitter import send_with_continuation
 from src.bot.keyboards.inline import (
     get_back_to_menu_keyboard,
     get_after_share_keyboard,
     get_result_summary_keyboard,
+    get_history_keyboard,
 )
 from src.analytics import (
     build_profile, format_profile_text, 
     get_benchmark, format_benchmark_text,
     get_user_progress, format_progress_text,
     build_pdp, format_pdp_text,
+    calculate_user_dynamics, format_dynamics_text, format_session_card,
 )
 from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores
 from src.ai.report_gen import split_message
@@ -28,48 +37,46 @@ logger = logging.getLogger(__name__)
 
 
 @router.message(Command("history"))
-async def cmd_history(message: Message):
-    """Показать историю диагностик пользователя."""
+async def cmd_history(message: Message, bot: Bot):
+    """Показать историю диагностик пользователя с динамикой развития."""
     try:
         async with get_session() as db:
             user = await get_user_by_telegram_id(db, message.from_user.id)
             
             if not user:
                 await message.answer(
-                    "📭 У тебя ещё нет истории диагностик.",
+                    "📭 <b>История диагностик</b>\n\n"
+                    "У тебя ещё нет диагностик.\n\n"
+                    "<i>Пройди первую: /start</i>",
                     reply_markup=get_back_to_menu_keyboard(),
                 )
                 return
             
-            sessions = await get_user_sessions(db, user.id, limit=5)
+            # Получаем только завершённые сессии
+            sessions = await get_completed_sessions(db, user.id, limit=10)
             
             if not sessions:
                 await message.answer(
-                    "📭 У тебя ещё нет завершённых диагностик.",
+                    "📭 <b>История диагностик</b>\n\n"
+                    "У тебя ещё нет завершённых диагностик.\n\n"
+                    "<i>Пройди диагностику: /start</i>",
                     reply_markup=get_back_to_menu_keyboard(),
                 )
                 return
             
-            # Формируем список
-            lines = ["📊 <b>Твои последние диагностики:</b>\n"]
+            # Рассчитываем динамику
+            dynamics = calculate_user_dynamics(sessions)
             
-            for i, sess in enumerate(sessions, 1):
-                status_emoji = "✅" if sess.status == "completed" else "⏳"
-                date_str = sess.started_at.strftime("%d.%m.%Y %H:%M")
-                
-                if sess.status == "completed" and sess.total_score is not None:
-                    score_str = f"<b>{sess.total_score}/100</b>"
-                else:
-                    score_str = "не завершено"
-                
-                lines.append(
-                    f"{i}. {status_emoji} {sess.role_name} ({sess.experience_name})\n"
-                    f"   📅 {date_str} | {score_str}"
-                )
+            # Форматируем текст с динамикой
+            dynamics_text = format_dynamics_text(dynamics)
             
-            await message.answer(
-                "\n".join(lines),
-                reply_markup=get_back_to_menu_keyboard(),
+            # Отправляем с умным разбиением
+            await send_with_continuation(
+                bot=bot,
+                chat_id=message.chat.id,
+                text=dynamics_text,
+                reply_markup=get_history_keyboard(sessions[0].id if sessions else None),
+                continuation_text="📊 <i>Продолжение истории...</i>",
             )
             
     except Exception as e:
@@ -593,9 +600,9 @@ async def process_share_card(callback: CallbackQuery):
 # ==================== NAVIGATION CALLBACKS ====================
 
 @router.callback_query(F.data == "show_history")
-async def show_history_callback(callback: CallbackQuery):
-    """Показ истории через callback."""
-    await callback.answer()
+async def show_history_callback(callback: CallbackQuery, bot: Bot):
+    """Показ истории через callback с динамикой развития."""
+    await callback.answer("📊 Загружаю историю...")
     
     try:
         async with get_session() as db:
@@ -603,39 +610,40 @@ async def show_history_callback(callback: CallbackQuery):
             
             if not user:
                 await callback.message.edit_text(
-                    "📭 У тебя ещё нет истории диагностик.",
+                    "📭 <b>История диагностик</b>\n\n"
+                    "У тебя ещё нет диагностик.\n\n"
+                    "<i>Пройди первую: /start</i>",
                     reply_markup=get_back_to_menu_keyboard(),
                 )
                 return
             
-            sessions = await get_user_sessions(db, user.id, limit=5)
+            sessions = await get_completed_sessions(db, user.id, limit=10)
             
             if not sessions:
                 await callback.message.edit_text(
-                    "📭 У тебя ещё нет завершённых диагностик.",
+                    "📭 <b>История диагностик</b>\n\n"
+                    "У тебя ещё нет завершённых диагностик.\n\n"
+                    "<i>Пройди диагностику: /start</i>",
                     reply_markup=get_back_to_menu_keyboard(),
                 )
                 return
             
-            # Формируем список
-            lines = ["📊 <b>Твои последние диагностики:</b>\n"]
-            for i, sess in enumerate(sessions, 1):
-                date_str = sess.completed_at.strftime("%d.%m") if sess.completed_at else "—"
-                score_str = f"{sess.total_score}/100" if sess.total_score else "—"
-                status_emoji = "✅" if sess.status == "completed" else "⏳"
-                lines.append(
-                    f"{i}. {status_emoji} {sess.role_name} ({sess.experience_name})\n"
-                    f"   📅 {date_str} | {score_str}"
-                )
+            # Рассчитываем динамику
+            dynamics = calculate_user_dynamics(sessions)
+            dynamics_text = format_dynamics_text(dynamics)
             
-            await callback.message.edit_text(
-                "\n".join(lines),
-                reply_markup=get_back_to_menu_keyboard(),
+            # Отправляем новым сообщением (edit_text не подходит для длинных)
+            await send_with_continuation(
+                bot=bot,
+                chat_id=callback.message.chat.id,
+                text=dynamics_text,
+                reply_markup=get_history_keyboard(sessions[0].id if sessions else None),
+                continuation_text="📊 <i>Продолжение истории...</i>",
             )
             
     except Exception as e:
         logger.error(f"Failed to get history via callback: {e}")
-        await callback.message.edit_text(
+        await callback.message.answer(
             "❌ Не удалось загрузить историю.",
             reply_markup=get_back_to_menu_keyboard(),
         )

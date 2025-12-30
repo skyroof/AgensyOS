@@ -20,3 +20,11 @@ AI_MODEL=anthropic/claude-sonnet-4.5
 DEBUG=false
 LOG_LEVEL=INFO
 
+# Payments (ЮKassa через Telegram Payments API)
+# Получить токен: @BotFather → /mybots → Bot Settings → Payments → ЮKassa
+# Требуется регистрация на yookassa.ru и прохождение модерации
+PAYMENT_PROVIDER_TOKEN=your_yookassa_payment_token
+
+# Админ для уведомлений о платежах (Telegram user ID)
+ADMIN_TELEGRAM_ID=123456789
+

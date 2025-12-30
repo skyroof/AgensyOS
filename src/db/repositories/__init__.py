@@ -11,7 +11,10 @@ from src.db.repositories.diagnostic_repo import (
     get_session_with_answers,
     save_feedback,
     get_average_rating,
+    get_completed_sessions,
+    get_user_stats,
 )
+from src.db.repositories import balance_repo
 
 __all__ = [
     "get_or_create_user",
@@ -26,5 +29,9 @@ __all__ = [
     "get_session_with_answers",
     "save_feedback",
     "get_average_rating",
+    "get_completed_sessions",
+    "get_user_stats",
+    # Монетизация
+    "balance_repo",
 ]
 

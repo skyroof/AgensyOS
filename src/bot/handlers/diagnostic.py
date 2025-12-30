@@ -21,7 +21,10 @@ from src.bot.keyboards.inline import (
     get_result_summary_keyboard,
     get_back_to_summary_keyboard,
     get_delayed_feedback_keyboard,
+    get_demo_result_keyboard,
+    get_paywall_keyboard,
 )
+from src.db.repositories import balance_repo
 from src.ai.question_gen import generate_question
 from src.ai.cached_questions import get_cached_first_question
 from src.ai.answer_analyzer import (
@@ -35,13 +38,20 @@ from src.ai.report_gen import generate_detailed_report, split_message, split_rep
 from src.ai.client import AIServiceError
 from src.analytics import build_profile, format_profile_text, get_benchmark, format_benchmark_text, build_pdp, format_pdp_text
 from src.db import get_session
-from src.db.repositories import save_answer, update_session_progress, complete_session, save_feedback
+from src.db.repositories import save_answer, update_session_progress, complete_session, save_feedback, create_session
+from src.utils.message_splitter import send_long_message, send_with_continuation
 
 router = Router(name="diagnostic")
 logger = logging.getLogger(__name__)
 
-TOTAL_QUESTIONS = 10
+# Количество вопросов в зависимости от режима
+FULL_QUESTIONS = 10
+DEMO_QUESTIONS = 3
 REMINDER_TIMEOUT = 5 * 60  # 5 минут
+
+def get_total_questions(mode: str) -> int:
+    """Получить количество вопросов для режима."""
+    return DEMO_QUESTIONS if mode == "demo" else FULL_QUESTIONS
 
 # Хранилище таймеров напоминаний {chat_id: asyncio.Task}
 _reminder_tasks: dict[int, asyncio.Task] = {}
@@ -287,6 +297,51 @@ def cancel_reminder(chat_id: int):
 async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Начало диагностики — первый вопрос."""
     data = await state.get_data()
+    user_id = callback.from_user.id
+    
+    # ==================== ПРОВЕРКА ДОСТУПА ====================
+    async with get_session() as db:
+        access = await balance_repo.check_diagnostic_access(db, user_id)
+    
+    if not access.allowed:
+        # Нет доступа — показываем paywall
+        await callback.message.edit_text(
+            "🔒 <b>Нет доступных диагностик</b>\n\n"
+            f"Баланс: {access.balance} диагностик\n"
+            f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
+            "Купи диагностику, чтобы продолжить!",
+            reply_markup=get_paywall_keyboard(),
+        )
+        await callback.answer("Нужна подписка", show_alert=True)
+        return
+    
+    # Определяем режим (demo или full)
+    diagnostic_mode = access.mode  # "demo" или "full"
+    total_questions = get_total_questions(diagnostic_mode)
+    
+    logger.info(f"[ACCESS] User {user_id}: mode={diagnostic_mode}, balance={access.balance}")
+    
+    # Списываем диагностику с баланса
+    async with get_session() as db:
+        await balance_repo.use_diagnostic(db, user_id, diagnostic_mode)
+    
+    # ==================== СОЗДАНИЕ СЕССИИ ====================
+    db_session_id = None
+    try:
+        async with get_session() as db:
+            diagnostic_session = await create_session(
+                session=db,
+                user_id=user_id,
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data["experience"],
+                experience_name=data["experience_name"],
+                mode=diagnostic_mode,  # Сохраняем режим
+            )
+            db_session_id = diagnostic_session.id
+            logger.info(f"Created {diagnostic_mode} session {db_session_id} for user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to create session in DB: {e}")
     
     await state.update_data(
         current_question=1,
@@ -294,6 +349,9 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         analysis_history=[],
         answer_stats=[],  # Статистика ответов для gamification
         question_start_time=time.time(),  # Трекаем время на ответ
+        db_session_id=db_session_id,  # Сохраняем ID сессии
+        diagnostic_mode=diagnostic_mode,  # "demo" или "full"
+        total_questions=total_questions,  # 3 или 10
     )
     
     # Пробуем взять первый вопрос из кэша (мгновенно!)
@@ -352,8 +410,11 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
     
     await state.update_data(current_question_text=question)
     
+    # Для демо показываем другой текст
+    demo_note = "\n\n<i>🎁 Демо-версия: 3 вопроса</i>" if diagnostic_mode == "demo" else ""
+    
     await callback.message.edit_text(
-        f"<b>Вопрос 1/{TOTAL_QUESTIONS}</b>\n\n{question}",
+        f"<b>Вопрос 1/{total_questions}</b>\n\n{question}{demo_note}",
     )
     await state.set_state(DiagnosticStates.answering)
     await callback.answer()
@@ -526,9 +587,10 @@ async def edit_answer(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     current = data.get("current_question", 1)
     question = data.get("current_question_text", "")
+    total = data.get("total_questions", FULL_QUESTIONS)
     
     await callback.message.edit_text(
-        f"<b>Вопрос {current}/{TOTAL_QUESTIONS}</b>\n\n{question}\n\n"
+        f"<b>Вопрос {current}/{total}</b>\n\n{question}\n\n"
         f"✏️ <i>Введи новый ответ:</i>"
     )
     await state.set_state(DiagnosticStates.answering)
@@ -654,9 +716,11 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # Показываем typing indicator
     await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
     
+    total = data.get("total_questions", FULL_QUESTIONS)
+    
     # Показываем, что анализируем с прогрессом
     thinking_msg = await callback.message.edit_text(
-        f"🧠 Анализирую ответ {current}/{TOTAL_QUESTIONS}...\n\n<code>▓░░░░░░░░░</code> 10%"
+        f"🧠 Анализирую ответ {current}/{total}...\n\n<code>▓░░░░░░░░░</code> 10%"
     )
     
     # Сохраняем ответ
@@ -678,7 +742,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # === УЛУЧШЕННЫЙ ПРОГРЕСС-БАР ===
     async def update_progress():
         """Обновляет прогресс-бар во время AI запросов с анимацией."""
-        is_last_question = current >= TOTAL_QUESTIONS
+        is_last_question = current >= total
         
         # Разные этапы для разных действий
         progress_states = [
@@ -756,7 +820,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     async def _generate_next():
         """Генерация следующего вопроса (если нужен)."""
         nonlocal ai_had_issues
-        if next_question_num > TOTAL_QUESTIONS:
+        if next_question_num > total:
             return None
         try:
             return await generate_question(
@@ -798,7 +862,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # Добавляем анализ в историю ПЕРЕД генерацией следующего вопроса
     analysis_history.append(analysis)
     
-    if next_question_num <= TOTAL_QUESTIONS:
+    if next_question_num <= total:
         gen_start = time.perf_counter()
         next_question = await _generate_next()
         gen_ms = (time.perf_counter() - gen_start) * 1000
@@ -853,7 +917,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             logger.error(f"Failed to save answer to DB: {e}")
     
     # Проверяем, есть ли ещё вопросы
-    if next_question_num <= TOTAL_QUESTIONS:
+    if next_question_num <= total:
         
         await state.update_data(
             current_question=next_question_num,
@@ -880,7 +944,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         # === PROGRESS & GAMIFICATION ===
         progress_msg = generate_progress_message(
             current_question=current,
-            total_questions=TOTAL_QUESTIONS,
+            total_questions=total,
             answer_stats=data.get("answer_stats", []),
             answer_text=answer_text,
         )
@@ -891,7 +955,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         
         # Показываем следующий вопрос
         await callback.message.answer(
-            f"<b>Вопрос {next_question_num}/{TOTAL_QUESTIONS}</b>\n\n{next_question}",
+            f"<b>Вопрос {next_question_num}/{total}</b>\n\n{next_question}",
         )
         await state.set_state(DiagnosticStates.answering)
         
@@ -1028,6 +1092,33 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                         analysis_history=analysis_history,
                     )
                     logger.info(f"Session {db_session_id} completed with score {scores['total']}")
+                    
+                    # Планируем напоминание о повторной диагностике через 30 дней
+                    try:
+                        from src.db.repositories.reminder_repo import schedule_diagnostic_reminder, get_or_create_user_settings
+                        
+                        user_settings = await get_or_create_user_settings(db, db_user_id)
+                        
+                        if user_settings.diagnostic_reminders_enabled:
+                            # Определяем главную зону роста
+                            focus_skill = None
+                            if raw_averages:
+                                sorted_gaps = sorted(raw_averages.items(), key=lambda x: x[1])
+                                if sorted_gaps:
+                                    focus_skill = sorted_gaps[0][0]  # Метрика с самым низким баллом
+                            
+                            await schedule_diagnostic_reminder(
+                                session=db,
+                                user_id=db_user_id,
+                                session_id=db_session_id,
+                                last_score=scores['total'],
+                                focus_skill=focus_skill,
+                                days_delay=30,
+                            )
+                            logger.info(f"Scheduled reminder for user {db_user_id} in 30 days")
+                    except Exception as re:
+                        logger.warning(f"Failed to schedule reminder: {re}")
+                    
             except Exception as e:
                 logger.error(f"Failed to complete session: {e}")
         
@@ -1041,19 +1132,36 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         )
         await state.set_state(DiagnosticStates.finished)
         
-        # === ОТПРАВЛЯЕМ ТОЛЬКО SUMMARY CARD ===
-        summary_card = generate_summary_card(data, scores, profile)
+        # === ДИАГНОСТИКА: ЛОГИРУЕМ ДЛИНЫ ВСЕХ СЕКЦИЙ ===
+        logger.info(
+            f"[MSG_LEN] Generated results for user {callback.from_user.id}: "
+            f"header={len(header)}, report={len(report)}, "
+            f"profile={len(profile_text)}, pdp={len(pdp_text)}, "
+            f"summary={len(generate_summary_card(data, scores, profile))}"
+        )
         
-        # Выбираем клавиатуру
-        if db_session_id:
-            keyboard = get_result_summary_keyboard(db_session_id)
+        # === ДЕМО VS ПОЛНАЯ ВЕРСИЯ ===
+        diagnostic_mode = data.get("diagnostic_mode", "full")
+        
+        if diagnostic_mode == "demo":
+            # ДЕМО: Урезанный отчёт + paywall
+            demo_summary = generate_demo_summary_card(data, scores, profile)
+            await thinking_msg.edit_text(demo_summary, reply_markup=get_demo_result_keyboard())
+            logger.info(f"Demo diagnostic completed for user {callback.from_user.id}")
         else:
-            keyboard = get_restart_keyboard()
-        
-        await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
-        
-        # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
-        asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
+            # ПОЛНАЯ ВЕРСИЯ: Summary Card
+            summary_card = generate_summary_card(data, scores, profile)
+            
+            # Выбираем клавиатуру
+            if db_session_id:
+                keyboard = get_result_summary_keyboard(db_session_id)
+            else:
+                keyboard = get_restart_keyboard()
+            
+            await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
+            
+            # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
+            asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
 
 
 # === ХРАНИЛИЩЕ ТАЙМЕРОВ FEEDBACK ===
@@ -1152,6 +1260,91 @@ def generate_summary_card(data: dict, scores: dict, profile) -> str:
 ━━━━━━━━━━━━━━━━━━━━
 
 <i>Выбери, что хочешь изучить подробнее:</i>"""
+
+
+def generate_demo_summary_card(data: dict, scores: dict, profile) -> str:
+    """
+    Генерация урезанного Demo Summary — побуждает к покупке.
+    
+    Показываем только:
+    - Общий балл
+    - 2 метрики (лучшая и худшая)
+    - Остальные 10 метрик скрыты
+    - Агрессивный CTA
+    """
+    total = scores["total"]
+    
+    # Уровень
+    if total >= 60:
+        level = "💪 Выше среднего"
+    elif total >= 40:
+        level = "📈 Средний уровень"
+    else:
+        level = "🌱 Есть над чем работать"
+    
+    # Прогресс-бар
+    filled = int(total / 4)
+    bar = "█" * filled + "░" * (25 - filled)
+    
+    # Только 2 метрики для демо (лучшая и худшая)
+    if profile.strengths:
+        best_metric = METRIC_NAMES_RU.get(profile.strengths[0], profile.strengths[0])
+        best_score = scores.get("raw_averages", {}).get(profile.strengths[0], 7.0)
+    else:
+        best_metric = "Коммуникация"
+        best_score = 7.0
+    
+    if profile.growth_areas:
+        worst_metric = METRIC_NAMES_RU.get(profile.growth_areas[0], profile.growth_areas[0])
+        worst_score = scores.get("raw_averages", {}).get(profile.growth_areas[0], 4.5)
+    else:
+        worst_metric = "Системное мышление"
+        worst_score = 4.5
+    
+    return f"""🎁 <b>ДЕМО-РЕЗУЛЬТАТ</b>
+
+<b>{data['role_name']}</b> • {data['experience_name']}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>📊 ОБЩИЙ БАЛЛ: {total}/100</b>
+<code>{bar}</code>
+{level}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>✅ Открытые метрики (2/12):</b>
+
+🟢 {best_metric}: <b>{best_score:.1f}/10</b>
+🔴 {worst_metric}: <b>{worst_score:.1f}/10</b>
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>🔒 Скрытые метрики (10):</b>
+
+├─ Системное мышление: ???
+├─ Лидерство: ???
+├─ Эмпатия: ???
+├─ Критическое мышление: ???
+├─ Адаптивность: ???
+├─ Навыки презентации: ???
+├─ Технические навыки: ???
+├─ Управление проектами: ???
+├─ Стратегическое видение: ???
+└─ Инновационность: ???
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>🔒 Также недоступно в демо:</b>
+
+├─ 📄 PDF-отчёт уровня McKinsey
+├─ 📈 Детальный профиль компетенций
+├─ 🎯 30-дневный план развития
+└─ 📊 Сравнение с рынком
+
+━━━━━━━━━━━━━━━━━━━━
+
+🔥 <b>Открой полную версию и узнай все 12 метрик!</b>"""
 
 
 def generate_score_header(data: dict, scores: dict) -> str:
@@ -1381,8 +1574,8 @@ async def skip_feedback_comment(callback: CallbackQuery, state: FSMContext):
 # ==================== STRUCTURED REPORT HANDLERS ====================
 
 @router.callback_query(F.data.startswith("show:report:"))
-async def show_detailed_report(callback: CallbackQuery, state: FSMContext):
-    """Показать детальный AI-анализ — ОДНО сообщение."""
+async def show_detailed_report(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Показать детальный AI-анализ — автоматическое разбиение на части."""
     session_id = int(callback.data.split(":")[2])
     data = await state.get_data()
     
@@ -1395,38 +1588,42 @@ async def show_detailed_report(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer("📊 Загружаю...")
     
-    # Объединяем header + report, но ограничиваем длину
+    # Объединяем header + report
     full_text = f"{header}\n\n{report}" if header else report
+    full_text = sanitize_html(full_text)
     
-    # Если текст слишком длинный — показываем краткую версию
-    if len(full_text) > 3800:
-        # Берём первые ~3500 символов и добавляем примечание
-        short_text = full_text[:3500]
-        # Обрезаем до последнего полного предложения
-        last_dot = max(short_text.rfind('.'), short_text.rfind('!'), short_text.rfind('\n\n'))
-        if last_dot > 2000:
-            short_text = short_text[:last_dot + 1]
-        
-        short_text += "\n\n<i>📄 Полный отчёт доступен в PDF</i>"
-        full_text = short_text
+    # === ДИАГНОСТИКА ДЛИНЫ СООБЩЕНИЙ ===
+    logger.info(f"[MSG_LEN] show_detailed_report: header={len(header)}, report={len(report)}, total={len(full_text)}")
     
+    # Используем умное разбиение вместо обрезки
     try:
-        await callback.message.answer(
-            sanitize_html(full_text),
+        await send_with_continuation(
+            bot=bot,
+            chat_id=callback.message.chat.id,
+            text=full_text,
             reply_markup=get_back_to_summary_keyboard(session_id),
+            continuation_text="📊 <i>Продолжение отчёта...</i>",
         )
     except Exception as e:
-        logger.warning(f"Report HTML error: {e}")
-        await callback.message.answer(
-            full_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', ''),
-            parse_mode=None,
-            reply_markup=get_back_to_summary_keyboard(session_id),
-        )
+        logger.error(f"[MSG_LEN] Failed to send report: {e}")
+        # Fallback — отправляем обрезанную версию
+        try:
+            short_text = full_text[:3500]
+            last_dot = max(short_text.rfind('.'), short_text.rfind('!'), short_text.rfind('\n\n'))
+            if last_dot > 2000:
+                short_text = short_text[:last_dot + 1]
+            short_text += "\n\n<i>📄 Полный отчёт доступен в PDF</i>"
+            await callback.message.answer(
+                short_text,
+                reply_markup=get_back_to_summary_keyboard(session_id),
+            )
+        except Exception as e2:
+            logger.error(f"Fallback also failed: {e2}")
 
 
 @router.callback_query(F.data.startswith("show:profile:"))
-async def show_profile(callback: CallbackQuery, state: FSMContext):
-    """Показать профиль компетенций — ОДНО сообщение."""
+async def show_profile(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Показать профиль компетенций — автоматическое разбиение."""
     session_id = int(callback.data.split(":")[2])
     data = await state.get_data()
     
@@ -1438,31 +1635,38 @@ async def show_profile(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer("🎯 Загружаю...")
     
-    # Ограничиваем длину
-    if len(profile_text) > 3800:
-        profile_text = profile_text[:3500]
-        last_newline = profile_text.rfind('\n\n')
-        if last_newline > 2000:
-            profile_text = profile_text[:last_newline]
-        profile_text += "\n\n<i>📄 Полный профиль в PDF</i>"
+    # === ДИАГНОСТИКА ДЛИНЫ СООБЩЕНИЙ ===
+    logger.info(f"[MSG_LEN] show_profile: {len(profile_text)} chars")
     
+    # Используем умное разбиение
     try:
-        await callback.message.answer(
-            profile_text,
+        await send_with_continuation(
+            bot=bot,
+            chat_id=callback.message.chat.id,
+            text=profile_text,
             reply_markup=get_back_to_summary_keyboard(session_id),
+            continuation_text="🎯 <i>Продолжение профиля...</i>",
         )
     except Exception as e:
-        logger.warning(f"Profile HTML error: {e}")
-        await callback.message.answer(
-            profile_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', ''),
-            parse_mode=None,
-            reply_markup=get_back_to_summary_keyboard(session_id),
-        )
+        logger.error(f"[MSG_LEN] Failed to send profile: {e}")
+        # Fallback
+        try:
+            short_text = profile_text[:3500]
+            last_newline = short_text.rfind('\n\n')
+            if last_newline > 2000:
+                short_text = short_text[:last_newline]
+            short_text += "\n\n<i>📄 Полный профиль в PDF</i>"
+            await callback.message.answer(
+                short_text,
+                reply_markup=get_back_to_summary_keyboard(session_id),
+            )
+        except Exception as e2:
+            logger.error(f"Fallback also failed: {e2}")
 
 
 @router.callback_query(F.data.startswith("show:pdp:"))
-async def show_pdp(callback: CallbackQuery, state: FSMContext):
-    """Показать план развития — ОДНО сообщение."""
+async def show_pdp(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Показать план развития — автоматическое разбиение."""
     session_id = int(callback.data.split(":")[2])
     data = await state.get_data()
     
@@ -1474,26 +1678,33 @@ async def show_pdp(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer("📈 Загружаю...")
     
-    # Ограничиваем длину
-    if len(pdp_text) > 3800:
-        pdp_text = pdp_text[:3500]
-        last_newline = pdp_text.rfind('\n\n')
-        if last_newline > 2000:
-            pdp_text = pdp_text[:last_newline]
-        pdp_text += "\n\n<i>📄 Полный план в PDF</i>"
+    # === ДИАГНОСТИКА ДЛИНЫ СООБЩЕНИЙ ===
+    logger.info(f"[MSG_LEN] show_pdp: {len(pdp_text)} chars")
     
+    # Используем умное разбиение
     try:
-        await callback.message.answer(
-            pdp_text,
+        await send_with_continuation(
+            bot=bot,
+            chat_id=callback.message.chat.id,
+            text=pdp_text,
             reply_markup=get_back_to_summary_keyboard(session_id),
+            continuation_text="📈 <i>Продолжение плана развития...</i>",
         )
     except Exception as e:
-        logger.warning(f"PDP HTML error: {e}")
-        await callback.message.answer(
-            pdp_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', ''),
-            parse_mode=None,
-            reply_markup=get_back_to_summary_keyboard(session_id),
-        )
+        logger.error(f"[MSG_LEN] Failed to send PDP: {e}")
+        # Fallback — обрезанная версия
+        try:
+            short_text = pdp_text[:3500]
+            last_newline = short_text.rfind('\n\n')
+            if last_newline > 2000:
+                short_text = short_text[:last_newline]
+            short_text += "\n\n<i>📄 Полный план в PDF</i>"
+            await callback.message.answer(
+                short_text,
+                reply_markup=get_back_to_summary_keyboard(session_id),
+            )
+        except Exception as e2:
+            logger.error(f"Fallback also failed: {e2}")
 
 
 @router.callback_query(F.data.startswith("show:summary:"))
