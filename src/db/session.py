@@ -20,7 +20,7 @@ def get_database_url() -> str:
     settings = get_settings()
     
     # Если PostgreSQL URL не задан или дефолтный — используем SQLite
-    if "postgresql" in settings.database_url and "user:password" in settings.database_url:
+    if "postgresql" in settings.database_url and "user:password" in settings.database_url and "localhost" in settings.database_url:
         # Дефолтный URL — переключаемся на SQLite
         return "sqlite+aiosqlite:///./diagnostic_bot.db"
     
