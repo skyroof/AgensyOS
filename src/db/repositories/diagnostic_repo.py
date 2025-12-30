@@ -17,6 +17,7 @@ async def create_session(
     experience: str,
     experience_name: str,
     mode: str = "full",  # "demo" (3 вопроса) или "full" (10 вопросов)
+    commit: bool = True,
 ) -> DiagnosticSession:
     """Создать новую сессию диагностики."""
     diagnostic_session = DiagnosticSession(
@@ -30,8 +31,11 @@ async def create_session(
         diagnostic_mode=mode,
     )
     session.add(diagnostic_session)
-    await session.commit()
-    await session.refresh(diagnostic_session)
+    if commit:
+        await session.commit()
+        await session.refresh(diagnostic_session)
+    else:
+        await session.flush()
     
     return diagnostic_session
 
@@ -67,6 +71,7 @@ async def update_session_progress(
     current_question: int,
     conversation_history: list[dict],
     analysis_history: list[dict],
+    commit: bool = True,
 ) -> None:
     """Обновить прогресс сессии."""
     stmt = (
@@ -79,7 +84,8 @@ async def update_session_progress(
         )
     )
     await session.execute(stmt)
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def complete_session(
@@ -89,6 +95,7 @@ async def complete_session(
     report: str,
     conversation_history: list[dict],
     analysis_history: list[dict],
+    commit: bool = True,
 ) -> None:
     """Завершить сессию и сохранить результаты."""
     stmt = (
@@ -108,7 +115,8 @@ async def complete_session(
         )
     )
     await session.execute(stmt)
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def save_answer(
@@ -118,6 +126,7 @@ async def save_answer(
     question_text: str,
     answer_text: str,
     analysis: dict | None = None,
+    commit: bool = True,
 ) -> Answer:
     """Сохранить ответ на вопрос."""
     scores = analysis.get("scores", {}) if analysis else {}
@@ -135,8 +144,11 @@ async def save_answer(
         analysis=analysis,
     )
     session.add(answer)
-    await session.commit()
-    await session.refresh(answer)
+    if commit:
+        await session.commit()
+        await session.refresh(answer)
+    else:
+        await session.flush()
     
     return answer
 
@@ -176,6 +188,7 @@ async def save_feedback(
     session_id: int,
     rating: int,
     comment: str | None = None,
+    commit: bool = True,
 ) -> Feedback:
     """Сохранить feedback от пользователя."""
     feedback = Feedback(
@@ -184,8 +197,11 @@ async def save_feedback(
         comment=comment,
     )
     session.add(feedback)
-    await session.commit()
-    await session.refresh(feedback)
+    if commit:
+        await session.commit()
+        await session.refresh(feedback)
+    else:
+        await session.flush()
     return feedback
 
 

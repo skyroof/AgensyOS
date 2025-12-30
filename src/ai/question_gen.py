@@ -5,7 +5,7 @@ import logging
 
 from src.ai.client import chat_completion
 from src.core.prompts.system import get_question_prompt
-from src.core.prompts.questions import get_questions
+from src.core.prompts.questions import get_questions, get_random_icebreaker
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,9 @@ async def generate_question(
     Returns:
         Текст вопроса
     """
-    # Для первого вопроса используем захардкоженный (более надёжно)
+    # Для первого вопроса используем случайный из разогревочных
     if question_number == 1:
-        questions = get_questions(role)
-        return questions[0]
+        return get_random_icebreaker(role)
     
     try:
         messages = get_question_prompt(
@@ -53,8 +52,8 @@ async def generate_question(
             max_tokens=500,
         )
         
-        # Очищаем от лишних кавычек и пробелов
-        question = question.strip().strip('"').strip("'")
+        # Очищаем от лишних пробелов (кавычки убираем промптом)
+        question = question.strip()
         
         return question
         

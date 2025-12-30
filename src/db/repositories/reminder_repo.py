@@ -41,6 +41,73 @@ async def schedule_diagnostic_reminder(
     return reminder
 
 
+async def schedule_stuck_reminder(
+    session: AsyncSession,
+    user_id: int,
+    session_id: int,
+    minutes_delay: int = 5,
+) -> DiagnosticReminder:
+    """
+    Запланировать напоминание о зависшей диагностике.
+    """
+    scheduled_at = datetime.utcnow() + timedelta(minutes=minutes_delay)
+    
+    reminder = DiagnosticReminder(
+        user_id=user_id,
+        session_id=session_id,
+        scheduled_at=scheduled_at,
+        reminder_type=f"stuck_{minutes_delay}min",
+        sent=False,
+        cancelled=False,
+    )
+    session.add(reminder)
+    await session.flush()
+    return reminder
+
+
+async def cancel_stuck_reminders(
+    session: AsyncSession,
+    user_id: int,
+    session_id: int,
+) -> None:
+    """Отменить все stuck-напоминания для сессии (когда юзер ответил)."""
+    stmt = (
+        update(DiagnosticReminder)
+        .where(DiagnosticReminder.user_id == user_id)
+        .where(DiagnosticReminder.session_id == session_id)
+        .where(DiagnosticReminder.reminder_type.like("stuck_%"))
+        .where(DiagnosticReminder.sent == False)
+        .where(DiagnosticReminder.cancelled == False)
+        .values(cancelled=True)
+    )
+    await session.execute(stmt)
+
+
+async def get_pending_reminders_with_users(
+    session: AsyncSession,
+    before: Optional[datetime] = None,
+) -> list[tuple[DiagnosticReminder, int]]:
+    """
+    Получить напоминания вместе с telegram_id пользователей.
+    
+    Возвращает список кортежей (reminder, telegram_id).
+    """
+    if before is None:
+        before = datetime.utcnow()
+    
+    stmt = (
+        select(DiagnosticReminder, User.telegram_id)
+        .join(User, DiagnosticReminder.user_id == User.id)
+        .where(DiagnosticReminder.scheduled_at <= before)
+        .where(DiagnosticReminder.sent == False)
+        .where(DiagnosticReminder.cancelled == False)
+        .order_by(DiagnosticReminder.scheduled_at)
+        .limit(100)
+    )
+    result = await session.execute(stmt)
+    return list(result.all())
+
+
 async def get_pending_reminders(
     session: AsyncSession,
     before: Optional[datetime] = None,

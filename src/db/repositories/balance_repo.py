@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import UserBalance, Payment, Promocode, PromocodeUse
+from src.core.prices import get_pack_prices, PACK_COUNTS
 
 
 class DiagnosticAccess(NamedTuple):
@@ -21,21 +22,7 @@ class DiagnosticAccess(NamedTuple):
     demo_used: bool
 
 
-# Цены пакетов (в копейках)
-PACK_PRICES = {
-    "single": 29900,   # 299₽
-    "pack3": 69900,    # 699₽
-    "pack10": 199000,  # 1990₽
-}
-
-PACK_COUNTS = {
-    "single": 1,
-    "pack3": 3,
-    "pack10": 10,
-}
-
-
-async def get_or_create_balance(session: AsyncSession, user_id: int) -> UserBalance:
+async def get_or_create_balance(session: AsyncSession, user_id: int, commit: bool = True) -> UserBalance:
     """Получить или создать баланс пользователя."""
     result = await session.execute(
         select(UserBalance).where(UserBalance.user_id == user_id)
@@ -45,8 +32,11 @@ async def get_or_create_balance(session: AsyncSession, user_id: int) -> UserBala
     if not balance:
         balance = UserBalance(user_id=user_id)
         session.add(balance)
-        await session.commit()
-        await session.refresh(balance)
+        if commit:
+            await session.commit()
+            await session.refresh(balance)
+        else:
+            await session.flush()
     
     return balance
 
@@ -66,7 +56,7 @@ async def check_diagnostic_access(session: AsyncSession, user_id: int) -> Diagno
     - balance: текущий баланс
     - demo_used: использовано ли демо
     """
-    balance = await get_or_create_balance(session, user_id)
+    balance = await get_or_create_balance(session, user_id, commit=False)
     
     # Есть оплаченные диагностики?
     if balance.diagnostics_balance > 0:
@@ -95,7 +85,7 @@ async def check_diagnostic_access(session: AsyncSession, user_id: int) -> Diagno
     )
 
 
-async def use_diagnostic(session: AsyncSession, user_id: int, mode: str) -> bool:
+async def use_diagnostic(session: AsyncSession, user_id: int, mode: str, commit: bool = True) -> bool:
     """
     Списать диагностику с баланса.
     
@@ -106,7 +96,7 @@ async def use_diagnostic(session: AsyncSession, user_id: int, mode: str) -> bool
     Returns:
         True если успешно списано
     """
-    balance = await get_or_create_balance(session, user_id)
+    balance = await get_or_create_balance(session, user_id, commit=False)
     
     if mode == "demo":
         if balance.demo_used:
@@ -114,7 +104,8 @@ async def use_diagnostic(session: AsyncSession, user_id: int, mode: str) -> bool
         balance.demo_used = True
         balance.total_used += 1
         balance.updated_at = datetime.utcnow()
-        await session.commit()
+        if commit:
+            await session.commit()
         return True
     
     elif mode == "full":
@@ -123,7 +114,8 @@ async def use_diagnostic(session: AsyncSession, user_id: int, mode: str) -> bool
         balance.diagnostics_balance -= 1
         balance.total_used += 1
         balance.updated_at = datetime.utcnow()
-        await session.commit()
+        if commit:
+            await session.commit()
         return True
     
     return False
@@ -133,7 +125,8 @@ async def add_diagnostics(
     session: AsyncSession, 
     user_id: int, 
     count: int,
-    payment_id: Optional[int] = None
+    payment_id: Optional[int] = None,
+    commit: bool = True
 ) -> UserBalance:
     """
     Добавить диагностики на баланс (после оплаты).
@@ -143,24 +136,28 @@ async def add_diagnostics(
         count: Количество диагностик
         payment_id: ID платежа (опционально)
     """
-    balance = await get_or_create_balance(session, user_id)
+    balance = await get_or_create_balance(session, user_id, commit=False)
     
     balance.diagnostics_balance += count
     balance.total_purchased += count
     balance.updated_at = datetime.utcnow()
     
-    await session.commit()
-    await session.refresh(balance)
+    if commit:
+        await session.commit()
+        await session.refresh(balance)
+    else:
+        await session.flush()
     
     return balance
 
 
-async def mark_demo_used(session: AsyncSession, user_id: int) -> None:
+async def mark_demo_used(session: AsyncSession, user_id: int, commit: bool = True) -> None:
     """Отметить демо как использованное."""
-    balance = await get_or_create_balance(session, user_id)
+    balance = await get_or_create_balance(session, user_id, commit=False)
     balance.demo_used = True
     balance.updated_at = datetime.utcnow()
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 # ==================== ПРОМОКОДЫ ====================
@@ -240,7 +237,8 @@ async def apply_promocode(
     promo: Promocode,
     user_id: int,
     payment_id: int,
-    discount_applied: int
+    discount_applied: int,
+    commit: bool = True
 ) -> PromocodeUse:
     """
     Применить промокод (записать использование).
@@ -256,7 +254,10 @@ async def apply_promocode(
         discount_applied=discount_applied,
     )
     session.add(use)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     
     return use
 
@@ -271,6 +272,7 @@ async def create_promocode(
     applicable_packs: Optional[list] = None,
     description: Optional[str] = None,
     created_by: Optional[str] = None,
+    commit: bool = True
 ) -> Promocode:
     """Создать новый промокод."""
     promo = Promocode(
@@ -284,8 +286,11 @@ async def create_promocode(
         created_by=created_by,
     )
     session.add(promo)
-    await session.commit()
-    await session.refresh(promo)
+    if commit:
+        await session.commit()
+        await session.refresh(promo)
+    else:
+        await session.flush()
     return promo
 
 
@@ -296,9 +301,11 @@ async def create_payment(
     user_id: int,
     pack_type: str,
     promo: Optional[Promocode] = None,
+    commit: bool = True
 ) -> Payment:
     """Создать запись о платеже (pending)."""
-    original_price = PACK_PRICES[pack_type]
+    prices = get_pack_prices()
+    original_price = prices[pack_type]
     discount = calculate_discount(promo, original_price) if promo else 0
     final_price = max(0, original_price - discount)
     
@@ -313,8 +320,11 @@ async def create_payment(
         status="pending",
     )
     session.add(payment)
-    await session.commit()
-    await session.refresh(payment)
+    if commit:
+        await session.commit()
+        await session.refresh(payment)
+    else:
+        await session.flush()
     
     return payment
 
@@ -324,6 +334,7 @@ async def complete_payment(
     payment_id: int,
     telegram_payment_charge_id: str,
     provider_payment_charge_id: str,
+    commit: bool = True
 ) -> Payment:
     """Завершить платёж (success)."""
     result = await session.execute(
@@ -336,8 +347,11 @@ async def complete_payment(
     payment.provider_payment_charge_id = provider_payment_charge_id
     payment.completed_at = datetime.utcnow()
     
-    await session.commit()
-    await session.refresh(payment)
+    if commit:
+        await session.commit()
+        await session.refresh(payment)
+    else:
+        await session.flush()
     
     return payment
 

@@ -2,8 +2,12 @@
 Системные промпты для AI диагностики.
 """
 
+PROMPT_VERSION = "1.0.0"
+PROMPT_DATE = "2025-12-30"
+
 # Базовый системный промпт для генерации вопросов
-QUESTION_GENERATOR_SYSTEM = """Ты — эксперт-диагност с 20-летним опытом найма и оценки специалистов в IT.
+QUESTION_GENERATOR_SYSTEM = f"""[SYSTEM_PROMPT_VERSION: {PROMPT_VERSION}]
+Ты — эксперт-диагност с 20-летним опытом найма и оценки специалистов в IT.
 Твоя задача — задавать глубокие, проницательные вопросы, чтобы максимально точно оценить уровень кандидата.
 
 ПРАВИЛА ГЕНЕРАЦИИ ВОПРОСОВ:
@@ -36,7 +40,8 @@ QUESTION_GENERATOR_SYSTEM = """Ты — эксперт-диагност с 20-л
 
 
 # Промпт для анализа ответа (12 метрик)
-ANSWER_ANALYZER_SYSTEM = """Ты — эксперт по оценке специалистов с 15-летним опытом HR и найма в IT.
+ANSWER_ANALYZER_SYSTEM = f"[SYSTEM_PROMPT_VERSION: {PROMPT_VERSION}]\n" + """
+Ты — эксперт по оценке специалистов с 15-летним опытом HR и найма в IT.
 Анализируй ответ кандидата максимально объективно и глубоко.
 
 ВАЖНО — КАЛИБРОВКА ОЦЕНОК:
@@ -222,9 +227,22 @@ def get_question_prompt(
     """
     # Формируем контекст из истории
     history_text = ""
+    total_items = len(conversation_history)
+    KEEP_LAST = 5  # Сколько последних вопросов сохранять
+    
     for i, item in enumerate(conversation_history, 1):
+        # Context Window Management:
+        # Если история длинная (> 7 вопросов), оставляем 1-й (знакомство) и последние 5.
+        # Середину сворачиваем.
+        if total_items > (KEEP_LAST + 2) and i > 1 and i <= (total_items - KEEP_LAST):
+            if i == 2: # Добавляем маркер один раз в начале пропуска
+                 history_text += "\n\n[... Предыдущие вопросы скрыты для экономии контекста ...]"
+            continue
+
         history_text += f"\n\nВОПРОС {i}: {item['question']}\nОТВЕТ: {item['answer']}"
         
+        # Добавляем анализ, если он есть для этого шага
+        # (analysis_history обычно синхронен с conversation_history)
         if i <= len(analysis_history):
             analysis = analysis_history[i-1]
             history_text += f"\nАНАЛИЗ: {analysis.get('hypothesis', 'Нет данных')}"

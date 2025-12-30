@@ -17,20 +17,29 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from src.db import get_session
 from src.db.repositories.reminder_repo import (
     get_pending_reminders,
+    get_pending_reminders_with_users,
     mark_reminder_sent,
     user_has_recent_diagnostic,
+    cancel_stuck_reminders,
 )
 from src.db.repositories.user_repo import get_user_by_telegram_id
-from src.db.models import User
+from src.db.models import User, DiagnosticSession
+
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
 # Интервал проверки (в секундах)
-CHECK_INTERVAL = 3600  # 1 час
+CHECK_INTERVAL = 60  # 1 минута (чаще для stuck reminders)
+
+# Глобальный экземпляр планировщика
+scheduler = AsyncIOScheduler()
 
 
 def get_reminder_keyboard(reminder_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для напоминания."""
+    """Клавиатура для напоминания 30 дней."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="🎯 Пройти снова", callback_data="restart"),
@@ -42,12 +51,21 @@ def get_reminder_keyboard(reminder_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_stuck_reminder_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для зависшей диагностики."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="▶️ Продолжить", callback_data="continue_diagnostic"),
+    )
+    return builder.as_markup()
+
+
 def format_reminder_text(
     last_score: int,
     focus_skill: Optional[str] = None,
     days_ago: int = 30,
 ) -> str:
-    """Форматировать текст напоминания."""
+    """Форматировать текст напоминания (30 дней)."""
     
     text = f"""👋 <b>Привет!</b>
 
@@ -80,32 +98,56 @@ async def send_diagnostic_reminders(bot: Bot) -> int:
     
     try:
         async with get_session() as db:
-            reminders = await get_pending_reminders(db)
+            # Используем оптимизированный запрос с join
+            reminders_data = await get_pending_reminders_with_users(db)
             
-            if not reminders:
-                logger.debug("No pending reminders")
+            if not reminders_data:
+                # logger.debug("No pending reminders")
                 return 0
             
-            logger.info(f"Processing {len(reminders)} pending reminders")
+            logger.info(f"Processing {len(reminders_data)} pending reminders")
             
-            for reminder in reminders:
+            for reminder, telegram_id in reminders_data:
                 try:
+                    if not telegram_id:
+                        logger.warning(f"User {reminder.user_id} has no telegram_id")
+                        await mark_reminder_sent(db, reminder.id)
+                        continue
+
+                    # === STUCK REMINDERS ===
+                    if reminder.reminder_type.startswith("stuck_"):
+                        # Проверяем статус сессии
+                        from sqlalchemy import select
+                        session_stmt = select(DiagnosticSession).where(DiagnosticSession.id == reminder.session_id)
+                        session_res = await db.execute(session_stmt)
+                        diag_session = session_res.scalar_one_or_none()
+                        
+                        if not diag_session or diag_session.status != "in_progress":
+                            # Сессия уже завершена или не найдена — отменяем напоминание
+                            await mark_reminder_sent(db, reminder.id)
+                            continue
+                            
+                        # Отправляем напоминание
+                        await bot.send_message(
+                            chat_id=telegram_id,
+                            text=(
+                                f"⏰ <b>Напоминание</b>\n\n"
+                                f"Ты на вопросе {diag_session.current_question}/10.\n"
+                                f"Можешь продолжить, когда будешь готов!\n\n"
+                                f"<i>Если нужно время подумать — это нормально 😊</i>"
+                            ),
+                            # reply_markup=get_stuck_reminder_keyboard(), # Можно добавить кнопку
+                        )
+                        
+                        await mark_reminder_sent(db, reminder.id)
+                        sent_count += 1
+                        logger.info(f"Sent stuck reminder to user {reminder.user_id}")
+                        continue
+
+                    # === 30 DAYS REMINDERS ===
                     # Проверяем, не прошёл ли пользователь диагностику недавно
                     if await user_has_recent_diagnostic(db, reminder.user_id, days=7):
                         logger.info(f"User {reminder.user_id} has recent diagnostic, skipping reminder")
-                        await mark_reminder_sent(db, reminder.id)
-                        continue
-                    
-                    # Получаем telegram_id
-                    from sqlalchemy import select
-                    from src.db.models import User
-                    
-                    stmt = select(User.telegram_id).where(User.id == reminder.user_id)
-                    result = await db.execute(stmt)
-                    telegram_id = result.scalar_one_or_none()
-                    
-                    if not telegram_id:
-                        logger.warning(f"User {reminder.user_id} not found")
                         await mark_reminder_sent(db, reminder.id)
                         continue
                     
@@ -148,29 +190,41 @@ async def send_diagnostic_reminders(bot: Bot) -> int:
 
 async def scheduler_loop(bot: Bot):
     """
-    Основной цикл планировщика.
-    
-    Запускается как фоновая задача при старте бота.
+    Wrapper для APScheduler job.
     """
-    logger.info("Scheduler started")
-    
-    while True:
-        try:
-            # Отправляем напоминания
-            sent = await send_diagnostic_reminders(bot)
-            if sent > 0:
-                logger.info(f"Sent {sent} diagnostic reminders")
-            
-            # TODO: Добавить PDP daily reminders
-            
-        except Exception as e:
-            logger.error(f"Scheduler error: {e}")
+    try:
+        # Отправляем напоминания
+        sent = await send_diagnostic_reminders(bot)
+        if sent > 0:
+            logger.info(f"Sent {sent} diagnostic reminders")
         
-        # Ждём до следующей проверки
-        await asyncio.sleep(CHECK_INTERVAL)
+        # TODO: Добавить PDP daily reminders
+        
+    except Exception as e:
+        logger.error(f"Scheduler error: {e}")
 
 
-def start_scheduler(bot: Bot) -> asyncio.Task:
-    """Запустить планировщик как фоновую задачу."""
-    return asyncio.create_task(scheduler_loop(bot))
+def start_scheduler(bot: Bot) -> AsyncIOScheduler:
+    """Запустить планировщик."""
+    if scheduler.running:
+        return scheduler
+        
+    scheduler.add_job(
+        scheduler_loop,
+        IntervalTrigger(seconds=CHECK_INTERVAL),
+        args=[bot],
+        id="diagnostic_reminders",
+        replace_existing=True,
+    )
+    
+    scheduler.start()
+    logger.info("Scheduler started (APScheduler)")
+    return scheduler
+
+
+def stop_scheduler():
+    """Остановить планировщик."""
+    if scheduler.running:
+        scheduler.shutdown()
+        logger.info("Scheduler stopped")
 

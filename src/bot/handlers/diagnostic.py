@@ -39,6 +39,7 @@ from src.ai.client import AIServiceError
 from src.analytics import build_profile, format_profile_text, get_benchmark, format_benchmark_text, build_pdp, format_pdp_text
 from src.db import get_session
 from src.db.repositories import save_answer, update_session_progress, complete_session, save_feedback, create_session
+from src.db.repositories.reminder_repo import schedule_stuck_reminder, cancel_stuck_reminders
 from src.utils.message_splitter import send_long_message, send_with_continuation
 
 router = Router(name="diagnostic")
@@ -47,15 +48,13 @@ logger = logging.getLogger(__name__)
 # Количество вопросов в зависимости от режима
 FULL_QUESTIONS = 10
 DEMO_QUESTIONS = 3
-REMINDER_TIMEOUT = 5 * 60  # 5 минут
+# REMINDER_TIMEOUT удален, так как теперь через БД (5 минут по дефолту)
 
 def get_total_questions(mode: str) -> int:
     """Получить количество вопросов для режима."""
     return DEMO_QUESTIONS if mode == "demo" else FULL_QUESTIONS
 
-# Хранилище таймеров напоминаний {chat_id: asyncio.Task}
-_reminder_tasks: dict[int, asyncio.Task] = {}
-
+# _reminder_tasks удален
 
 async def safe_send_chat_action(bot: Bot, chat_id: int, action: ChatAction) -> None:
     """Безопасная отправка chat action (игнорирует ошибки топиков/форумов)."""
@@ -262,35 +261,31 @@ def get_random_reaction(answer_length: int) -> str:
         return random.choice(POSITIVE_REACTIONS)
 
 
-async def _send_reminder(bot: Bot, chat_id: int, question_num: int):
-    """Отправляет напоминание через REMINDER_TIMEOUT секунд."""
+async def start_reminder(user_id: int, session_id: int):
+    """Запускает таймер напоминания (через БД)."""
+    if not session_id:
+        return
     try:
-        await asyncio.sleep(REMINDER_TIMEOUT)
-        await bot.send_message(
-            chat_id,
-            f"⏰ <b>Напоминание</b>\n\n"
-            f"Ты на вопросе {question_num}/{TOTAL_QUESTIONS}.\n"
-            f"Можешь продолжить, когда будешь готов!\n\n"
-            f"<i>Если нужно время подумать — это нормально 😊</i>",
-        )
-    except asyncio.CancelledError:
-        pass  # Таймер отменён — пользователь ответил
+        async with get_session() as db:
+            # Сначала отменяем старые, чтобы не дублировать
+            await cancel_stuck_reminders(db, user_id, session_id)
+            # Планируем новое (5 минут)
+            await schedule_stuck_reminder(db, user_id, session_id, minutes_delay=5)
+            await db.commit()
     except Exception as e:
-        logger.debug(f"Reminder failed: {e}")
+        logger.error(f"Failed to start reminder: {e}")
 
 
-def start_reminder(bot: Bot, chat_id: int, question_num: int):
-    """Запускает таймер напоминания."""
-    cancel_reminder(chat_id)
-    task = asyncio.create_task(_send_reminder(bot, chat_id, question_num))
-    _reminder_tasks[chat_id] = task
-
-
-def cancel_reminder(chat_id: int):
-    """Отменяет таймер напоминания."""
-    if chat_id in _reminder_tasks:
-        _reminder_tasks[chat_id].cancel()
-        del _reminder_tasks[chat_id]
+async def cancel_reminder(user_id: int, session_id: int):
+    """Отменяет таймер напоминания (через БД)."""
+    if not session_id:
+        return
+    try:
+        async with get_session() as db:
+            await cancel_stuck_reminders(db, user_id, session_id)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to cancel reminder: {e}")
 
 
 @router.callback_query(F.data == "start_diagnostic", DiagnosticStates.ready_to_start)
@@ -321,14 +316,18 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
     
     logger.info(f"[ACCESS] User {user_id}: mode={diagnostic_mode}, balance={access.balance}")
     
-    # Списываем диагностику с баланса
-    async with get_session() as db:
-        await balance_repo.use_diagnostic(db, user_id, diagnostic_mode)
-    
-    # ==================== СОЗДАНИЕ СЕССИИ ====================
+    # ==================== ТРАНЗАКЦИЯ: СПИСАНИЕ + СОЗДАНИЕ ====================
     db_session_id = None
     try:
         async with get_session() as db:
+            # 1. Списываем диагностику с баланса (без коммита)
+            success = await balance_repo.use_diagnostic(db, user_id, diagnostic_mode, commit=False)
+            if not success:
+                # Если вдруг баланс изменился между проверкой и списанием
+                await callback.answer("Ошибка доступа: баланс исчерпан", show_alert=True)
+                return
+
+            # 2. Создаем сессию (без коммита)
             diagnostic_session = await create_session(
                 session=db,
                 user_id=user_id,
@@ -336,12 +335,21 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
                 role_name=data["role_name"],
                 experience=data["experience"],
                 experience_name=data["experience_name"],
-                mode=diagnostic_mode,  # Сохраняем режим
+                mode=diagnostic_mode,
+                commit=False,
             )
+            
+            # 3. Фиксируем изменения
+            await db.commit()
+            await db.refresh(diagnostic_session)
             db_session_id = diagnostic_session.id
+            
             logger.info(f"Created {diagnostic_mode} session {db_session_id} for user {user_id}")
+            
     except Exception as e:
         logger.error(f"Failed to create session in DB: {e}")
+        await callback.answer("Ошибка базы данных", show_alert=True)
+        return
     
     await state.update_data(
         current_question=1,
@@ -420,7 +428,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
     await callback.answer()
     
     # Запускаем таймер напоминания
-    start_reminder(bot, callback.message.chat.id, 1)
+    await start_reminder(user_id, db_session_id)
 
 
 MIN_ANSWER_LENGTH = 50  # Минимальная длина ответа (для точной оценки)
@@ -431,7 +439,8 @@ MAX_ANSWER_LENGTH = 4000  # Максимальная длина (TG лимит 4
 async def capture_answer(message: Message, state: FSMContext):
     """Захват ответа и показ preview для подтверждения."""
     # Отменяем таймер напоминания
-    cancel_reminder(message.chat.id)
+    data = await state.get_data()
+    await cancel_reminder(message.from_user.id, data.get("db_session_id"))
     
     # Проверяем тип контента и даём подсказку
     if message.photo:
@@ -625,7 +634,7 @@ async def pause_session(callback: CallbackQuery, state: FSMContext):
             logger.error(f"Failed to save pause state: {e}")
     
     # Отменяем таймер напоминания
-    cancel_reminder(callback.message.chat.id)
+    await cancel_reminder(callback.from_user.id, db_session_id)
     
     await callback.message.edit_text(
         f"⏸️ <b>Диагностика на паузе</b>\n\n"
@@ -685,9 +694,24 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.message(DiagnosticStates.processing_answer)
+async def ignore_message_while_processing(message: Message):
+    """Игнорируем сообщения во время обработки."""
+    await message.answer("⏳ <b>Секунду...</b>\nЯ обрабатываю твой предыдущий ответ.")
+
+
+@router.callback_query(DiagnosticStates.processing_answer)
+async def ignore_callback_while_processing(callback: CallbackQuery):
+    """Игнорируем нажатия кнопок во время обработки."""
+    await callback.answer("⏳ Обрабатываю...", show_alert=False)
+
+
 @router.callback_query(F.data == "confirm_answer", DiagnosticStates.confirming_answer)
 async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение ответа — запускаем анализ."""
+    # Защита от Double Click и Race Conditions
+    await state.set_state(DiagnosticStates.processing_answer)
+    
     from aiogram.enums import ChatAction
     
     data = await state.get_data()
@@ -822,31 +846,17 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         nonlocal ai_had_issues
         if next_question_num > total:
             return None
-        try:
-            return await generate_question(
-                role=data["role"],
-                role_name=data["role_name"],
-                experience=data["experience_name"],
-                question_number=next_question_num,
-                conversation_history=conversation_history,
-                analysis_history=analysis_history,
-            )
-        except AIServiceError as e:
-            logger.error(f"AI service error during question gen: {e}")
-            ai_had_issues = True
-            # Fallback вопросы
-            fallback_questions = [
-                "Расскажи о сложном проекте, где тебе пришлось принимать нестандартные решения.",
-                "Как ты справляешься с дедлайнами и приоритизацией задач?",
-                "Опиши ситуацию, когда тебе приходилось работать с неопределённостью.",
-                "Что для тебя означает качественная работа?",
-                "Расскажи о своём подходе к обучению новым навыкам.",
-            ]
-            idx = (next_question_num - 1) % len(fallback_questions)
-            return fallback_questions[idx]
-        except Exception as e:
-            logger.error(f"Question generation failed: {e}")
-            return f"Вопрос {next_question_num}: Расскажи подробнее о своём опыте и подходе к работе."
+        
+        # generate_question внутри обрабатывает ошибки и делает fallback
+        # на качественные захардкоженные вопросы по роли.
+        return await generate_question(
+            role=data["role"],
+            role_name=data["role_name"],
+            experience=data["experience_name"],
+            question_number=next_question_num,
+            conversation_history=conversation_history,
+            analysis_history=analysis_history,
+        )
     
     # === ПОСЛЕДОВАТЕЛЬНЫЙ ЗАПУСК (качество > скорость) ===
     # 1. Сначала анализируем текущий ответ
@@ -901,10 +911,11 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     
     analysis_history.append(analysis)
     
-    # Сохраняем ответ в БД
+    # === ТРАНЗАКЦИЯ: СОХРАНЕНИЕ ОТВЕТА И ПРОГРЕССА ===
     if db_session_id:
         try:
             async with get_session() as db:
+                # 1. Сохраняем ответ (без коммита)
                 await save_answer(
                     session=db,
                     diagnostic_session_id=db_session_id,
@@ -912,9 +923,25 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                     question_text=current_question,
                     answer_text=answer_text,
                     analysis=analysis,
+                    commit=False,
                 )
+                
+                # 2. Если есть следующий вопрос, обновляем прогресс (без коммита)
+                if next_question_num <= total:
+                    await update_session_progress(
+                        session=db,
+                        session_id=db_session_id,
+                        current_question=next_question_num,
+                        conversation_history=conversation_history,
+                        analysis_history=analysis_history,
+                        commit=False,
+                    )
+                
+                # 3. Фиксируем транзакцию
+                await db.commit()
+                
         except Exception as e:
-            logger.error(f"Failed to save answer to DB: {e}")
+            logger.error(f"Failed to save answer/progress to DB: {e}")
     
     # Проверяем, есть ли ещё вопросы
     if next_question_num <= total:
@@ -926,20 +953,6 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             analysis_history=analysis_history,
             question_start_time=time.time(),  # Трекаем время для следующего вопроса
         )
-        
-        # Сохраняем прогресс в БД
-        if db_session_id:
-            try:
-                async with get_session() as db:
-                    await update_session_progress(
-                        session=db,
-                        session_id=db_session_id,
-                        current_question=next_question_num,
-                        conversation_history=conversation_history,
-                        analysis_history=analysis_history,
-                    )
-            except Exception as e:
-                logger.error(f"Failed to update progress: {e}")
         
         # === PROGRESS & GAMIFICATION ===
         progress_msg = generate_progress_message(
@@ -960,10 +973,10 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await state.set_state(DiagnosticStates.answering)
         
         # Запускаем таймер напоминания для следующего вопроса
-        start_reminder(bot, callback.message.chat.id, next_question_num)
+        await start_reminder(callback.from_user.id, db_session_id)
     else:
         # Все вопросы заданы — генерируем детальный отчёт
-        cancel_reminder(callback.message.chat.id)  # Отменяем таймер
+        await cancel_reminder(callback.from_user.id, db_session_id)  # Отменяем таймер
         from aiogram.enums import ChatAction
         
         # Устанавливаем state generating_report для защиты от race condition

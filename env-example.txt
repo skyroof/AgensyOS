@@ -24,19 +24,20 @@ ROUTERAI_API_KEY=sk-...
 ROUTERAI_BASE_URL=https://routerai.ru/api/v1
 
 # Модель AI (рекомендуется Claude Sonnet 4.5)
-# Варианты: anthropic/claude-sonnet-4.5, openai/gpt-4-turbo, google/gemini-1.5-pro
+# Варианты: anthropic/claude-sonnet-4.5, openai/gpt-4-turbo, google/gemini-2.0-flash
 AI_MODEL=anthropic/claude-sonnet-4.5
 
 # --------------------------------------------------
-# 🗄️ DATABASE
+# 🗄️ DATABASE & REDIS
 # --------------------------------------------------
 # PostgreSQL URL (рекомендуется Supabase)
 # Формат: postgresql+asyncpg://user:password@host:port/database
 # Получить: https://supabase.com/ → Settings → Database → Connection string
 DATABASE_URL=postgresql+asyncpg://postgres.xxx:password@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
 
-# Или SQLite для локальной разработки (оставь пустым DATABASE_URL):
-# DATABASE_URL=
+# Redis (для Docker Compose не меняй, если запускаешь локально - redis://localhost:6379/0)
+# Если используешь внешний Redis (Upstash/Railway), вставь URL сюда.
+REDIS_URL=redis://redis:6379/0
 
 # --------------------------------------------------
 # 💳 PAYMENTS (ЮKassa через Telegram)
@@ -46,7 +47,7 @@ DATABASE_URL=postgresql+asyncpg://postgres.xxx:password@aws-0-eu-central-1.poole
 # Требуется регистрация на https://yookassa.ru/ и модерация
 PAYMENT_PROVIDER_TOKEN=381764678:TEST:...
 
-# Telegram ID админа для уведомлений о платежах
+# Telegram ID админа для уведомлений о платежах и ошибках
 # Узнать свой ID: https://t.me/userinfobot
 ADMIN_TELEGRAM_ID=785561885
 
@@ -58,6 +59,9 @@ DEBUG=false
 
 # Уровень логирования (DEBUG, INFO, WARNING, ERROR)
 LOG_LEVEL=INFO
+
+# Формат логов (text - для разработки, json - для продакшена/ELK)
+LOG_FORMAT=json
 
 # --------------------------------------------------
 # 📊 MONITORING (опционально)

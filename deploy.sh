@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Остановка скрипта при ошибке
+set -e
+
+echo "🚀 Starting deployment..."
+
+# 1. Pull latest code
+echo "📥 Pulling latest code..."
+git pull origin main
+
+# 2. Check for .env file
+if [ ! -f .env ]; then
+    echo "⚠️ .env file not found! Creating from example..."
+    cp env-example.txt .env
+    echo "❗ Please edit .env file and run this script again."
+    exit 1
+fi
+
+# 3. Build and restart containers
+echo "🏗️ Building and restarting containers..."
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+
+# 4. Cleanup unused images
+echo "🧹 Cleaning up..."
+docker image prune -f
+
+echo "✅ Deployment completed successfully!"
+echo "📜 Logs:"
+docker-compose logs -f --tail=50 bot

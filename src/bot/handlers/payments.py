@@ -142,13 +142,13 @@ async def buy_callback(callback: CallbackQuery, state: FSMContext):
             
             # Добавляем диагностики
             await balance_repo.add_diagnostics(
-                session, user_id, payment.diagnostics_count, payment.id
+                session, user_id, payment.diagnostics_count, payment.id, commit=False
             )
             
             # Записываем использование промокода
             if promo:
                 await balance_repo.apply_promocode(
-                    session, promo, user_id, payment.id, payment.discount_amount
+                    session, promo, user_id, payment.id, payment.discount_amount, commit=False
                 )
             
             await session.commit()
@@ -326,17 +326,36 @@ async def successful_payment_handler(message: Message, state: FSMContext):
         return
     
     async with get_session() as session:
+        # 1. Проверка идемпотентности
+        # Сначала получаем текущий статус платежа
+        existing_payment = await balance_repo.get_payment(session, payment_id)
+        
+        if not existing_payment:
+            logger.error(f"[PAYMENT] Payment not found: {payment_id}")
+            await message.answer("⚠️ Ошибка: платёж не найден.")
+            return
+
+        if existing_payment.status == "success":
+            logger.warning(f"[PAYMENT] Duplicate webhook for payment {payment_id}")
+            # Платёж уже обработан, просто сообщаем пользователю (или молчим, если это повторный webhook)
+            # Но так как это message handler (successful_payment), это сообщение от пользователя (клиент Telegram)
+            # или сервиса. successful_payment обычно приходит от клиента.
+            # Поэтому лучше сообщить, что всё ок.
+            await message.answer("✅ Платёж уже был успешно обработан ранее.", reply_markup=get_after_payment_keyboard())
+            return
+
         # Обновляем статус платежа
         payment = await balance_repo.complete_payment(
             session,
             payment_id,
             telegram_payment_charge_id=payment_info.telegram_payment_charge_id,
             provider_payment_charge_id=payment_info.provider_payment_charge_id,
+            commit=False
         )
         
         # Добавляем диагностики на баланс
         balance = await balance_repo.add_diagnostics(
-            session, message.from_user.id, payment.diagnostics_count, payment.id
+            session, message.from_user.id, payment.diagnostics_count, payment.id, commit=False
         )
         
         # Применяем промокод если был
@@ -345,8 +364,10 @@ async def successful_payment_handler(message: Message, state: FSMContext):
             promo = await balance_repo.get_promocode(session, promo_code)
             if promo:
                 await balance_repo.apply_promocode(
-                    session, promo, message.from_user.id, payment.id, payment.discount_amount
+                    session, promo, message.from_user.id, payment.id, payment.discount_amount, commit=False
                 )
+    
+        await session.commit()
     
     # Очищаем state
     await state.clear()

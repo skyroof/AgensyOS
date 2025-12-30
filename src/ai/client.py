@@ -21,12 +21,7 @@ MAX_DELAY = 30.0  # максимальная задержка
 BACKOFF_MULTIPLIER = 2.0
 
 # Директория для debug логов
-DEBUG_LOGS_DIR = Path("debug_logs")
-
-
-def _ensure_debug_dir():
-    """Создать директорию для логов если её нет."""
-    DEBUG_LOGS_DIR.mkdir(exist_ok=True)
+# DEBUG_LOGS_DIR = Path("debug_logs")
 
 
 def _log_ai_interaction(
@@ -37,7 +32,7 @@ def _log_ai_interaction(
     duration_ms: float | None = None,
 ):
     """
-    Логировать взаимодействие с AI в файл.
+    Логировать взаимодействие с AI.
     
     Args:
         messages: Отправленные сообщения (промпт)
@@ -46,14 +41,12 @@ def _log_ai_interaction(
         error: Текст ошибки (если есть)
         duration_ms: Время выполнения в мс
     """
-    _ensure_debug_dir()
-    
-    timestamp = datetime.now()
-    filename = timestamp.strftime("%Y-%m-%d_%H-%M-%S") + f"_{status}.json"
-    filepath = DEBUG_LOGS_DIR / filename
-    
+    # Логируем только в debug режиме
+    if not get_settings().debug:
+        return
+
     log_entry = {
-        "timestamp": timestamp.isoformat(),
+        "timestamp": datetime.now().isoformat(),
         "status": status,
         "duration_ms": duration_ms,
         "prompt": messages,
@@ -62,9 +55,8 @@ def _log_ai_interaction(
     }
     
     try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(log_entry, f, ensure_ascii=False, indent=2)
-        logger.debug(f"AI interaction logged to {filepath}")
+        # В Docker логах это будет JSON строка
+        logger.debug(f"AI Interaction: {json.dumps(log_entry, ensure_ascii=False)}")
     except Exception as e:
         logger.warning(f"Failed to log AI interaction: {e}")
 
@@ -110,6 +102,7 @@ async def chat_completion(
     temperature: float = 0.7,
     max_tokens: int = 2000,
     retry: bool = True,
+    response_format: dict | None = None,
 ) -> str:
     """
     Отправить запрос к AI и получить ответ с retry логикой.
@@ -119,6 +112,7 @@ async def chat_completion(
         temperature: Креативность (0-1)
         max_tokens: Максимум токенов в ответе
         retry: Использовать retry с exponential backoff
+        response_format: Формат ответа (например, {"type": "json_object"})
         
     Returns:
         Текст ответа от AI
@@ -145,6 +139,7 @@ async def chat_completion(
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                response_format=response_format,
             )
             
             result = response.choices[0].message.content

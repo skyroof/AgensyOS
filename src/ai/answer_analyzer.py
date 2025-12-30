@@ -13,7 +13,7 @@ from src.core.prompts.system import get_analysis_prompt
 logger = logging.getLogger(__name__)
 
 # Директория для debug-логов
-DEBUG_LOG_DIR = "debug_logs"
+# DEBUG_LOG_DIR = "debug_logs"
 
 
 def log_ai_response(prompt_type: str, response: str, success: bool) -> None:
@@ -26,14 +26,9 @@ def log_ai_response(prompt_type: str, response: str, success: bool) -> None:
         success: Успешно ли распарсили
     """
     try:
-        os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         status = "ok" if success else "fail"
-        filename = f"{DEBUG_LOG_DIR}/{timestamp}_{prompt_type}_{status}.txt"
-        
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(response)
+        # Логируем в stdout вместо файла
+        logger.debug(f"AI Response ({prompt_type}, {status}): {response[:1000]}...") # Обрезаем длинные логи
     except Exception as e:
         logger.warning(f"Failed to log AI response: {e}")
 
@@ -62,39 +57,34 @@ def robust_json_parse(text: str) -> dict:
     text = text.strip()
     
     # Стратегия 1: Убираем markdown code blocks
-    if "```" in text:
-        import re
-        # Ищем ```json ... ``` (жадный поиск до последнего ```)
-        code_block_match = re.search(r'```(?:json)?\s*\n([\s\S]+?)\n```', text)
-        if code_block_match:
-            text = code_block_match.group(1).strip()
-        else:
-            # Попробуем без переноса строки
-            code_block_match = re.search(r'```(?:json)?\s*([\s\S]+?)```', text)
-            if code_block_match:
-                text = code_block_match.group(1).strip()
+    # Ищем ```json ... ``` или просто ``` ... ```
+    import re
+    code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    if code_block_match:
+        text = code_block_match.group(1).strip()
     
-    # Стратегия 2: Прямой парсинг (если уже чистый JSON)
+    # Стратегия 2: Прямой парсинг
     try:
-        result = json.loads(text)
-        if isinstance(result, dict):
-            return result
+        return json.loads(text)
     except json.JSONDecodeError:
         pass
     
-    # Стратегия 3: JSONDecoder.raw_decode (игнорирует trailing data)
-    try:
-        decoder = JSONDecoder()
-        # Ищем начало JSON объекта
-        start_idx = text.find('{')
-        if start_idx != -1:
-            obj, end_idx = decoder.raw_decode(text, start_idx)
-            if isinstance(obj, dict):
-                return obj
-    except json.JSONDecodeError:
-        pass
+    # Стратегия 3: Ищем от первого { до последнего }
+    start_idx = text.find('{')
+    end_idx = text.rfind('}')
     
-    # Стратегия 4: Извлечение JSON с учётом вложенности
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        candidate = text[start_idx:end_idx+1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            # Попытка исправить одинарные кавычки
+            try:
+                return json.loads(candidate.replace("'", '"'))
+            except json.JSONDecodeError:
+                pass
+    
+    # Стратегия 4: Извлечение JSON с учётом вложенности (Brace Counting)
     brace_count = 0
     start_idx = None
     
@@ -238,6 +228,7 @@ async def analyze_answer(question: str, answer: str, role: str) -> dict:
             messages=messages,
             temperature=0.3,  # Более детерминированный анализ
             max_tokens=1000,
+            response_format={"type": "json_object"},
         )
         
         # Робастный парсинг JSON

@@ -7,8 +7,29 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    volumes:
-      - ./debug_logs:/app/debug_logs
     environment:
       - TZ=Europe/Moscow
+      - REDIS_URL=redis://redis:6379/0
+      # Override if needed, but .env takes precedence for mapped files usually, 
+      # but explicit environment vars in compose override .env file content if conflicting? 
+      # Actually, env_file loads vars, environment overrides them. 
+      # So we set a safe default here for docker networking.
+    volumes:
+      - ./debug_logs:/app/debug_logs
+    depends_on:
+      - redis
 
+  redis:
+    image: redis:7-alpine
+    container_name: diagnostic-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis_data:

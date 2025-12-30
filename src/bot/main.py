@@ -8,32 +8,26 @@ import sys
 import sentry_sdk
 
 from aiogram import Bot, Dispatcher
-
-# Sentry для мониторинга ошибок
-sentry_sdk.init(
-    dsn="https://e1fcaa6128a4bde0ad242461c6058ab2@o4510615985061888.ingest.de.sentry.io/4510615988404304",
-    send_default_pii=True,
-    traces_sample_rate=0.1,  # 10% трейсов для производительности
-)
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 
 from src.core.config import get_settings
 from src.bot.handlers import start, diagnostic, history, voice, pdp, settings, payments
 from src.bot.middlewares.error_handler import ErrorHandlerMiddleware
 from src.bot.middlewares.logging_middleware import LoggingMiddleware
-from src.bot.scheduler import start_scheduler
+from src.bot.scheduler import start_scheduler, stop_scheduler
 from src.db import init_db, close_db
-
-
-ADMIN_ID = 785561885  # @laitnerbro — для алертов
 
 
 async def send_admin_alert(bot, message: str):
     """Отправить алерт админу."""
+    config = get_settings()
+    if not config.admin_telegram_id:
+        return
+        
     try:
-        await bot.send_message(ADMIN_ID, f"🔔 <b>Bot Alert</b>\n\n{message}")
+        await bot.send_message(config.admin_telegram_id, f"🔔 <b>Bot Alert</b>\n\n{message}")
     except Exception:
         pass
 
@@ -42,11 +36,37 @@ async def main():
     """Запуск бота."""
     config = get_settings()
     
+    # Sentry для мониторинга ошибок
+    if config.sentry_dsn:
+        sentry_sdk.init(
+            dsn=config.sentry_dsn,
+            send_default_pii=True,
+            traces_sample_rate=0.1,
+        )
+    
     # Настройка логирования
+    log_handler = logging.StreamHandler(sys.stdout)
+    
+    if config.log_format.lower() == "json":
+        try:
+            from pythonjsonlogger import jsonlogger
+            formatter = jsonlogger.JsonFormatter(
+                "%(asctime)s %(name)s %(levelname)s %(message)s",
+                rename_fields={"levelname": "level", "asctime": "timestamp"}
+            )
+            log_handler.setFormatter(formatter)
+        except ImportError:
+            pass
+
+    if not log_handler.formatter:
+        log_handler.setFormatter(logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        ))
+
     logging.basicConfig(
         level=getattr(logging, config.log_level),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        stream=sys.stdout,
+        handlers=[log_handler],
+        force=True,
     )
     logger = logging.getLogger(__name__)
     
@@ -60,8 +80,9 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     
-    # Диспетчер с хранилищем состояний в памяти
-    dp = Dispatcher(storage=MemoryStorage())
+    # Диспетчер с хранилищем состояний в Redis
+    storage = RedisStorage.from_url(config.redis_url)
+    dp = Dispatcher(storage=storage)
     
     # Регистрация middleware
     dp.message.middleware(LoggingMiddleware())
@@ -84,7 +105,7 @@ async def main():
     logger.info(f"🤖 AI Model: {config.ai_model}")
     
     # Запуск планировщика напоминаний
-    scheduler_task = start_scheduler(bot)
+    scheduler = start_scheduler(bot)
     logger.info("⏰ Планировщик напоминаний запущен")
     
     try:
@@ -96,11 +117,10 @@ async def main():
         await send_admin_alert(bot, f"❌ Критическая ошибка:\n<code>{e}</code>")
         raise
     finally:
-        logger.info("🛑 Бот останавливается...")
-        scheduler_task.cancel()  # Останавливаем планировщик
-        await send_admin_alert(bot, "🛑 Бот остановлен")
+        stop_scheduler()
         await close_db()
         await bot.session.close()
+        logger.info("🛑 Бот остановлен")
 
 
 if __name__ == "__main__":

@@ -39,15 +39,27 @@ class Settings(BaseSettings):
         description="Redis connection string"
     )
     
+    # Monitoring
+    sentry_dsn: str | None = Field(
+        default=None,
+        description="Sentry DSN for error tracking"
+    )
+
     # App
     debug: bool = Field(default=False, description="Debug mode")
     log_level: str = Field(default="INFO", description="Logging level")
+    log_format: str = Field(default="text", description="Logging format: text or json")
     
     # Payments (Telegram Payments API)
     payment_provider_token: str = Field(
         default="",
         description="Payment provider token from @BotFather"
     )
+    
+    # Pricing (in kopecks/cents)
+    price_single: int = Field(default=29900, description="Price for 1 diagnostic in kopecks")
+    price_pack3: int = Field(default=69900, description="Price for 3 diagnostics in kopecks")
+    price_pack10: int = Field(default=199000, description="Price for 10 diagnostics in kopecks")
     
     # Admin
     admin_telegram_id: int = Field(

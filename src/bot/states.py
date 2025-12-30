@@ -26,6 +26,9 @@ class DiagnosticStates(StatesGroup):
     # Подтверждение ответа перед отправкой
     confirming_answer = State()
     
+    # Обработка ответа (защита от double click)
+    processing_answer = State()
+    
     # Генерация отчёта (защита от race condition)
     generating_report = State()
     
