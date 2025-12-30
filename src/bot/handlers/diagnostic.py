@@ -8,6 +8,7 @@ import random
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.enums import ChatAction
 
 from src.bot.states import DiagnosticStates
 from src.bot.keyboards.inline import (
@@ -22,6 +23,7 @@ from src.bot.keyboards.inline import (
     get_delayed_feedback_keyboard,
 )
 from src.ai.question_gen import generate_question
+from src.ai.cached_questions import get_cached_first_question
 from src.ai.answer_analyzer import (
     analyze_answer, 
     calculate_category_scores,
@@ -286,18 +288,59 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         question_start_time=time.time(),  # Трекаем время на ответ
     )
     
-    # Показываем "печатает..."
-    await callback.message.edit_text("🔍 Готовлю первый вопрос...")
+    # Пробуем взять первый вопрос из кэша (мгновенно!)
+    cached_question = get_cached_first_question(data["role"], data["experience"])
     
-    # Генерируем первый вопрос
-    question = await generate_question(
-        role=data["role"],
-        role_name=data["role_name"],
-        experience=data["experience_name"],
-        question_number=1,
-        conversation_history=[],
-        analysis_history=[],
-    )
+    if cached_question:
+        # Кэш найден — показываем быструю анимацию
+        loading_msg = await callback.message.edit_text(
+            "🚀 <b>Запускаю диагностику...</b>"
+        )
+        await asyncio.sleep(0.5)  # Минимальная задержка для UX
+        question = cached_question
+        logger.info(f"Using cached first question for {data['role']}/{data['experience']}")
+    else:
+        # Кэш не найден — генерируем через AI с анимацией
+        loading_msg = await callback.message.edit_text(
+            "🧠 <b>Подготавливаю диагностику...</b>\n\n<code>░░░░░░░░░░</code> 0%"
+        )
+        
+        async def animate_first_question():
+            states = [
+                ("▓▓░░░░░░░░", "20%", "Анализирую профиль..."),
+                ("▓▓▓▓░░░░░░", "40%", "Формирую стратегию..."),
+                ("▓▓▓▓▓▓░░░░", "60%", "Генерирую вопрос..."),
+                ("▓▓▓▓▓▓▓▓░░", "80%", "Оптимизирую..."),
+            ]
+            try:
+                for bar, pct, status in states:
+                    await asyncio.sleep(1.5)
+                    await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
+                    try:
+                        await loading_msg.edit_text(
+                            f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
+                        )
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                pass
+        
+        anim_task = asyncio.create_task(animate_first_question())
+        
+        question = await generate_question(
+            role=data["role"],
+            role_name=data["role_name"],
+            experience=data["experience_name"],
+            question_number=1,
+            conversation_history=[],
+            analysis_history=[],
+        )
+        
+        anim_task.cancel()
+        try:
+            await anim_task
+        except asyncio.CancelledError:
+            pass
     
     await state.update_data(current_question_text=question)
     
@@ -624,32 +667,48 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     next_question_num = current + 1
     start_time = time.perf_counter()
     
-    # === ПРОГРЕСС-БАР ===
+    # === УЛУЧШЕННЫЙ ПРОГРЕСС-БАР ===
     async def update_progress():
-        """Обновляет прогресс-бар во время AI запросов."""
-        # На последнем вопросе — другой текст (нет следующего вопроса)
+        """Обновляет прогресс-бар во время AI запросов с анимацией."""
         is_last_question = current >= TOTAL_QUESTIONS
-        last_step_text = "Финализирую результат..." if is_last_question else "Генерирую вопрос..."
         
+        # Разные этапы для разных действий
         progress_states = [
+            ("▓░░░░░░░░░", "10%", "Читаю ответ..."),
             ("▓▓░░░░░░░░", "20%", "Анализирую глубину..."),
-            ("▓▓▓▓░░░░░░", "40%", "Оцениваю структуру..."),
-            ("▓▓▓▓▓▓░░░░", "60%", "Выявляю инсайты..."),
-            ("▓▓▓▓▓▓▓▓░░", "80%", last_step_text),
+            ("▓▓▓░░░░░░░", "30%", "Оцениваю структуру..."),
+            ("▓▓▓▓░░░░░░", "40%", "Выявляю инсайты..."),
+            ("▓▓▓▓▓░░░░░", "50%", "Формирую оценку..."),
+            ("▓▓▓▓▓▓░░░░", "60%", "Сопоставляю с метриками..."),
         ]
+        
+        # Добавляем финальные шаги в зависимости от контекста
+        if is_last_question:
+            progress_states.extend([
+                ("▓▓▓▓▓▓▓░░░", "70%", "Подготавливаю результаты..."),
+                ("▓▓▓▓▓▓▓▓░░", "80%", "Финализирую анализ..."),
+                ("▓▓▓▓▓▓▓▓▓░", "90%", "Почти готово..."),
+            ])
+        else:
+            progress_states.extend([
+                ("▓▓▓▓▓▓▓░░░", "70%", "Генерирую следующий вопрос..."),
+                ("▓▓▓▓▓▓▓▓░░", "80%", "Оптимизирую формулировку..."),
+                ("▓▓▓▓▓▓▓▓▓░", "90%", "Почти готово..."),
+            ])
+        
         chat_id = callback.message.chat.id
         try:
             for bar, pct, status in progress_states:
-                await asyncio.sleep(3)  # Обновляем каждые 3 сек
+                await asyncio.sleep(1.5)  # Быстрее обновляем
                 await bot.send_chat_action(chat_id, ChatAction.TYPING)
                 try:
                     await thinking_msg.edit_text(
-                        f"🧠 {status}\n\n<code>{bar}</code> {pct}"
+                        f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
                     )
                 except Exception:
-                    pass  # Сообщение могло быть уже отредактировано
+                    pass
         except asyncio.CancelledError:
-            pass  # Задача отменена — AI завершился раньше
+            pass
     
     # Запускаем прогресс-бар в фоне
     progress_task = asyncio.create_task(update_progress())
@@ -717,12 +776,30 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             logger.error(f"Question generation failed: {e}")
             return f"Вопрос {next_question_num}: Расскажи подробнее о своём опыте и подходе к работе."
     
-    # Запускаем параллельно
+    # === ПОСЛЕДОВАТЕЛЬНЫЙ ЗАПУСК (качество > скорость) ===
+    # 1. Сначала анализируем текущий ответ
+    # 2. Добавляем анализ в историю
+    # 3. Генерируем следующий вопрос с ПОЛНЫМ контекстом
+    # AI видит и ответ, и его анализ (скоры, инсайты, gaps) — максимальная адаптивность
+    
+    analyze_start = time.perf_counter()
+    analysis = await _analyze()
+    analyze_ms = (time.perf_counter() - analyze_start) * 1000
+    logger.info(f"[PERF] Q{current}: analyze done in {analyze_ms:.0f}ms")
+    
+    # Добавляем анализ в историю ПЕРЕД генерацией следующего вопроса
+    analysis_history.append(analysis)
+    
     if next_question_num <= TOTAL_QUESTIONS:
-        analysis, next_question = await asyncio.gather(_analyze(), _generate_next())
+        gen_start = time.perf_counter()
+        next_question = await _generate_next()
+        gen_ms = (time.perf_counter() - gen_start) * 1000
+        logger.info(f"[PERF] Q{current}: generate done in {gen_ms:.0f}ms (total: {analyze_ms + gen_ms:.0f}ms)")
     else:
-        analysis = await _analyze()
         next_question = None
+    
+    # Убираем из history (добавится в правильном месте ниже)
+    analysis_history.pop()
     
     # Останавливаем прогресс-бар
     progress_task.cancel()
@@ -732,7 +809,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         pass
     
     duration_ms = (time.perf_counter() - start_time) * 1000
-    logger.info(f"Answer {current} analyzed: {analysis.get('scores', {})} | Next Q generated | {duration_ms:.0f}ms total")
+    logger.info(f"Answer {current} processed: {analysis.get('scores', {})} | {duration_ms:.0f}ms total")
     
     # Уведомляем пользователя о проблемах с AI (если были)
     if ai_had_issues:
@@ -844,17 +921,22 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             "<i>Анализирую все 10 ответов...</i>"
         )
         
-        # Прогресс-бар для отчёта
+        # Улучшенный прогресс-бар для отчёта
         async def report_progress():
             progress_states = [
+                ("▓░░░░░░░░░", "10%", "Собираю данные диагностики..."),
+                ("▓▓░░░░░░░░", "20%", "Анализирую 10 ответов..."),
                 ("▓▓▓░░░░░░░", "30%", "Выявляю паттерны..."),
-                ("▓▓▓▓▓░░░░░", "50%", "Формирую рекомендации..."),
-                ("▓▓▓▓▓▓▓░░░", "70%", "Оцениваю потенциал..."),
+                ("▓▓▓▓░░░░░░", "40%", "Вычисляю 12 метрик..."),
+                ("▓▓▓▓▓░░░░░", "50%", "Формирую профиль..."),
+                ("▓▓▓▓▓▓░░░░", "60%", "Генерирую рекомендации..."),
+                ("▓▓▓▓▓▓▓░░░", "70%", "Составляю план развития..."),
+                ("▓▓▓▓▓▓▓▓░░", "80%", "Сравниваю с рынком..."),
                 ("▓▓▓▓▓▓▓▓▓░", "90%", "Финализирую отчёт..."),
             ]
             try:
                 for bar, pct, status in progress_states:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(2)  # Быстрее обновляем
                     await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
                     try:
                         await report_msg.edit_text(
