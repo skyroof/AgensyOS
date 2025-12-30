@@ -47,6 +47,14 @@ REMINDER_TIMEOUT = 5 * 60  # 5 минут
 _reminder_tasks: dict[int, asyncio.Task] = {}
 
 
+async def safe_send_chat_action(bot: Bot, chat_id: int, action: ChatAction) -> None:
+    """Безопасная отправка chat action (игнорирует ошибки топиков/форумов)."""
+    try:
+        await bot.send_chat_action(chat_id, action)
+    except Exception:
+        pass  # Игнорируем ошибки (топики, форумы, etc)
+
+
 def generate_progress_message(
     current_question: int,
     total_questions: int,
@@ -315,7 +323,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
             try:
                 for bar, pct, status in states:
                     await asyncio.sleep(1.5)
-                    await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
+                    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
                     try:
                         await loading_msg.edit_text(
                             f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
@@ -644,7 +652,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer("✅ Анализирую...")
     
     # Показываем typing indicator
-    await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
+    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
     
     # Показываем, что анализируем с прогрессом
     thinking_msg = await callback.message.edit_text(
@@ -700,7 +708,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         try:
             for bar, pct, status in progress_states:
                 await asyncio.sleep(1.5)  # Быстрее обновляем
-                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                await safe_send_chat_action(bot, chat_id, ChatAction.TYPING)
                 try:
                     await thinking_msg.edit_text(
                         f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
@@ -937,7 +945,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             try:
                 for bar, pct, status in progress_states:
                     await asyncio.sleep(2)  # Быстрее обновляем
-                    await bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
+                    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
                     try:
                         await report_msg.edit_text(
                             f"📊 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
