@@ -20,7 +20,6 @@ from src.db.repositories.reminder_repo import (
     get_pending_reminders_with_users,
     mark_reminder_sent,
     user_has_recent_diagnostic,
-    cancel_stuck_reminders,
 )
 from src.db.models import DiagnosticSession
 
@@ -346,10 +345,6 @@ async def scheduler_loop(bot: Bot):
 
     # 2. Daily PDP tasks
     await send_daily_pdp_tasks(bot)
-
-    # 3. Отмена зависших
-    async with get_session() as db:
-        await cancel_stuck_reminders(db)
 
 
 async def run_weekly_digest_job(bot: Bot):
