@@ -1,6 +1,7 @@
 """
 Обработчик команды /start и выбора параметров.
 """
+
 import logging
 from datetime import datetime, timedelta
 from aiogram import Router, F
@@ -25,10 +26,8 @@ from src.bot.keyboards.inline import (
 from src.db import get_session
 from src.db.repositories import (
     get_or_create_user,
-    create_session as create_db_session,
     get_active_session,
     get_user_sessions,
-    get_completed_sessions,
     get_user_stats,
 )
 from src.db.repositories import balance_repo
@@ -52,6 +51,27 @@ WELCOME_TEXT = """
 • Mindset — ценности и зрелость
 
 <b>Выбери свою роль:</b>
+"""
+
+TEASER_TEXT = """
+📊 <b>Что получишь после диагностики</b>
+
+• Персональный профиль по 12 метрикам (Hard/Soft/Thinking/Mindset)
+• Точки роста и сильные стороны
+• Персональный PDP на 30 дней с микро‑заданиями
+
+Готов начать?
+"""
+
+
+def get_goal_question_text(first_name: str) -> str:
+    """Вопрос о цели перед стартом диагностики."""
+    return f"""
+👋 <b>Привет, {first_name}!</b>
+
+Сначала уточним цель, чтобы подстроить вопросы и рекомендации.
+
+Что сейчас важнее?
 """
 
 
@@ -96,11 +116,11 @@ async def cmd_start(message: Message, state: FSMContext):
     """Обработка команды /start."""
     # Сбрасываем состояние
     await state.clear()
-    
+
     db_user_id = None
     active_session = None
     user_first_name = message.from_user.first_name or "друг"
-    
+
     # Сохраняем/обновляем пользователя в БД
     try:
         async with get_session() as db:
@@ -114,14 +134,14 @@ async def cmd_start(message: Message, state: FSMContext):
             db_user_id = user.id
             await state.update_data(db_user_id=user.id)
             logger.info(f"User {user.telegram_id} (@{user.username}) started bot")
-            
+
             # Проверяем незавершённые сессии
             active_session = await get_active_session(db, user.id)
-            
+
     except Exception as e:
         logger.error(f"Failed to save user: {e}")
         # Продолжаем работу даже без БД
-    
+
     # Если есть незавершённая сессия — предлагаем продолжить
     if active_session:
         # Проверяем TTL сессии
@@ -129,30 +149,32 @@ async def cmd_start(message: Message, state: FSMContext):
         if session_age < timedelta(hours=SESSION_TTL_HOURS):
             current_q = active_session.current_question
             role_name = active_session.role_name
-            
+
             await message.answer(
                 f"👋 <b>Привет, {user_first_name}!</b>\n\n"
                 f"У тебя есть незавершённая диагностика:\n"
                 f"• Роль: {role_name}\n"
                 f"• Прогресс: <b>{current_q - 1}/10</b> вопросов\n\n"
                 f"Хочешь продолжить с того места?",
-                reply_markup=get_session_recovery_keyboard(active_session.id, current_q),
+                reply_markup=get_session_recovery_keyboard(
+                    active_session.id, current_q
+                ),
             )
             await state.set_state(DiagnosticStates.session_recovery)
             return
-    
+
     # Проверяем, есть ли у пользователя завершённые диагностики
     has_completed = False
     best_score = None
     balance_info = ""
-    
+
     if db_user_id:
         try:
             async with get_session() as db:
                 stats = await get_user_stats(db, db_user_id)
                 has_completed = stats["total_diagnostics"] > 0
                 best_score = stats["best_score"]
-                
+
                 # Получаем баланс диагностик
                 access = await balance_repo.check_diagnostic_access(db, db_user_id)
                 if access.balance > 0:
@@ -161,15 +183,15 @@ async def cmd_start(message: Message, state: FSMContext):
                     balance_info = "\n🆓 <b>Доступна бесплатная демо-диагностика!</b>\n"
                 else:
                     balance_info = "\n🔒 <b>Нет доступных диагностик</b> — /buy\n"
-                    
+
         except Exception as e:
             logger.warning(f"Failed to get user stats: {e}")
-    
+
     # Выбираем клавиатуру
     if has_completed:
         # Для опытных пользователей сразу даем выбор роли (пропускаем тизер)
         keyboard = get_start_with_history_keyboard(True, best_score)
-        
+
         await message.answer(
             get_welcome_text(user_first_name, balance_info),
             reply_markup=keyboard,
@@ -179,7 +201,7 @@ async def cmd_start(message: Message, state: FSMContext):
         # Для новых пользователей — Teaser + Micro-commitment
         # 1. Отправляем тизер результата
         await message.answer(TEASER_TEXT)
-        
+
         # 2. Задаем вопрос о цели (Micro-commitment)
         await message.answer(
             get_goal_question_text(user_first_name),
@@ -193,7 +215,7 @@ async def process_goal(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора цели (Micro-commitment)."""
     goal = callback.data.split(":")[1]
     await state.update_data(user_goal=goal)
-    
+
     # Visual Role Selection (текстовая визуализация)
     role_text = """
 🎯 <b>Цель принята!</b> Давай подберем программу под твой профиль.
@@ -208,7 +230,7 @@ async def process_goal(callback: CallbackQuery, state: FSMContext):
 
 👇 <b>Кто ты?</b>
 """
-    
+
     await callback.message.edit_text(
         role_text,
         reply_markup=get_role_keyboard(),
@@ -222,9 +244,9 @@ async def process_role(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора роли."""
     role = callback.data.split(":")[1]
     role_name = "Дизайнер" if role == "designer" else "Продакт-менеджер"
-    
+
     await state.update_data(role=role, role_name=role_name)
-    
+
     await callback.message.edit_text(
         f"✅ Роль: <b>{role_name}</b>\n\nТеперь выбери свой опыт:",
         reply_markup=get_experience_keyboard(),
@@ -308,23 +330,23 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
         "senior": "3-5 лет",
         "lead": "5+ лет",
     }
-    
+
     exp_key = callback.data.split(":")[1]
     exp_value = exp_map[exp_key]
-    
+
     await state.update_data(experience=exp_key, experience_name=exp_value)
-    
+
     data = await state.get_data()
     db_user_id = data.get("db_user_id")
     is_returning_user = False
     last_score = None
-    
+
     # ==================== ПРОВЕРКА ДОСТУПА ====================
     if db_user_id:
         try:
             async with get_session() as db:
                 access = await balance_repo.check_diagnostic_access(db, db_user_id)
-                
+
                 if not access.allowed:
                     # Нет доступа — показываем paywall
                     await callback.message.edit_text(
@@ -339,30 +361,30 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
                     )
                     await callback.answer("Нужна подписка", show_alert=True)
                     return
-                
+
                 # Сохраняем информацию о доступе
                 await state.update_data(
                     access_mode=access.mode,  # "demo" или "full"
                     access_balance=access.balance,
                 )
-                
+
                 # Проверяем историю (returning user)
                 past_sessions = await get_user_sessions(db, db_user_id, limit=5)
                 completed = [s for s in past_sessions if s.status == "completed"]
                 if completed:
                     is_returning_user = True
                     last_score = completed[0].total_score
-                    
+
         except Exception as e:
             logger.error(f"Failed to check access: {e}")
-    
+
     # Для возвращающихся — сокращённый онбординг
     if is_returning_user:
         first_name = callback.from_user.first_name or "друг"
         stats_line = ""
         if last_score:
             stats_line = f"В прошлый раз ты набрал <b>{last_score}/100</b>."
-        
+
         await callback.message.edit_text(
             RETURNING_USER_TEXT.format(
                 first_name=first_name,
@@ -373,12 +395,12 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
         await state.set_state(DiagnosticStates.onboarding)
         await callback.answer()
         return
-    
+
     # Для новых — Progressive Onboarding (Step 1) с контекстом
     role = data.get("role", "designer")
     experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
     question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
-    
+
     # Определяем режим диагностики
     access_mode = data.get("access_mode", "full")
     if access_mode == "demo":
@@ -389,9 +411,9 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
         mode_info = "\n💎 <b>Режим: ПОЛНАЯ диагностика</b>"
         questions_count = "10 вопросов"
         time_estimate = "~15 минут"
-    
+
     onboarding = ONBOARDING_STEP1.format(
-        role_name=data['role_name'],
+        role_name=data["role_name"],
         exp_value=exp_value,
         mode_info=mode_info,
         experience_tip=experience_tip,
@@ -399,7 +421,7 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
         questions_count=questions_count,
         time_estimate=time_estimate,
     )
-    
+
     await callback.message.edit_text(
         onboarding,
         reply_markup=get_onboarding_keyboard(),
@@ -422,7 +444,7 @@ async def process_onboarding_step2(callback: CallbackQuery, state: FSMContext):
 async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
     """Завершение онбординга и переход к диагностике."""
     data = await state.get_data()
-    
+
     await callback.message.edit_text(
         f"✅ <b>Всё готово!</b>\n\n"
         f"Роль: {data.get('role_name', 'Не выбрана')}\n"
@@ -438,12 +460,12 @@ async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
 async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
     """Возврат к шагу 1 онбординга."""
     data = await state.get_data()
-    
+
     role = data.get("role", "designer")
     exp_key = data.get("experience", "middle")
     experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
     question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
-    
+
     # Определяем режим диагностики
     access_mode = data.get("access_mode", "full")
     if access_mode == "demo":
@@ -454,17 +476,17 @@ async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
         mode_info = "\n💎 <b>Режим: ПОЛНАЯ диагностика</b>"
         questions_count = "10 вопросов"
         time_estimate = "~15 минут"
-    
+
     onboarding = ONBOARDING_STEP1.format(
-        role_name=data.get('role_name', 'Специалист'),
-        exp_value=data.get('experience_name', ''),
+        role_name=data.get("role_name", "Специалист"),
+        exp_value=data.get("experience_name", ""),
         mode_info=mode_info,
         experience_tip=experience_tip,
         question_topics=question_topics,
         questions_count=questions_count,
         time_estimate=time_estimate,
     )
-    
+
     await callback.message.edit_text(
         onboarding,
         reply_markup=get_onboarding_keyboard(),
@@ -472,14 +494,11 @@ async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-
-
-
 @router.callback_query(F.data == "skip_onboarding", DiagnosticStates.onboarding)
 async def process_skip_onboarding(callback: CallbackQuery, state: FSMContext):
     """Пропуск онбординга для возвращающихся пользователей."""
     data = await state.get_data()
-    
+
     await state.set_state(DiagnosticStates.ready_to_start)
     await callback.message.edit_text(
         f"🚀 <b>Погнали!</b>\n\n"
@@ -495,19 +514,19 @@ async def process_skip_onboarding(callback: CallbackQuery, state: FSMContext):
 async def process_show_onboarding(callback: CallbackQuery, state: FSMContext):
     """Показать онбординг по запросу (для возвращающихся)."""
     data = await state.get_data()
-    
+
     role = data.get("role", "designer")
     exp_key = data.get("experience", "middle")
     experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
     question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
-    
+
     onboarding = ONBOARDING_STEP1.format(
-        role_name=data.get('role_name', 'Специалист'),
-        exp_value=data.get('experience_name', ''),
+        role_name=data.get("role_name", "Специалист"),
+        exp_value=data.get("experience_name", ""),
         experience_tip=experience_tip,
         question_topics=question_topics,
     )
-    
+
     await callback.message.edit_text(
         onboarding,
         reply_markup=get_onboarding_keyboard(),
@@ -521,13 +540,13 @@ async def process_restart(callback: CallbackQuery, state: FSMContext):
     # Сохраняем db_user_id перед очисткой
     data = await state.get_data()
     db_user_id = data.get("db_user_id")
-    
+
     await state.clear()
-    
+
     # Восстанавливаем db_user_id
     if db_user_id:
         await state.update_data(db_user_id=db_user_id)
-    
+
     # Перезапуск — начинаем с выбора цели (но без тизера)
     await callback.message.edit_text(
         "🔄 <b>Перезапуск</b>\n\nДавай начнем сначала. Какая твоя главная цель сейчас?",
@@ -537,27 +556,29 @@ async def process_restart(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("continue_session:"), DiagnosticStates.session_recovery)
+@router.callback_query(
+    F.data.startswith("continue_session:"), DiagnosticStates.session_recovery
+)
 async def continue_session(callback: CallbackQuery, state: FSMContext):
     """Продолжение незавершённой сессии."""
     from src.db.repositories import get_session_by_id
     import time
-    
+
     session_id = int(callback.data.split(":")[1])
-    
+
     try:
         async with get_session() as db:
             db_session = await get_session_by_id(db, session_id)
-            
+
             if not db_session:
                 await callback.answer("❌ Сессия не найдена", show_alert=True)
                 return
-            
+
             # Восстанавливаем FSM state из БД
             conversation_history = db_session.conversation_history or []
             analysis_history = db_session.analysis_history or []
             current_question = db_session.current_question
-            
+
             await state.update_data(
                 db_session_id=db_session.id,
                 db_user_id=db_session.user_id,
@@ -571,14 +592,17 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
                 answer_stats=[],  # Начинаем статистику заново
                 question_start_time=time.time(),
             )
-            
+
             # Получаем последний вопрос из истории или генерируем новый
-            if conversation_history and len(conversation_history) >= current_question - 1:
+            if (
+                conversation_history
+                and len(conversation_history) >= current_question - 1
+            ):
                 # Если есть история — генерируем следующий вопрос
                 from src.ai.client import generate_question
-                
+
                 await callback.message.edit_text("🔄 Восстанавливаю сессию...")
-                
+
                 question = await generate_question(
                     role=db_session.role,
                     role_name=db_session.role_name,
@@ -587,9 +611,9 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
                     conversation_history=conversation_history,
                     analysis_history=analysis_history,
                 )
-                
+
                 await state.update_data(current_question_text=question)
-                
+
                 await callback.message.edit_text(
                     f"✅ <b>Сессия восстановлена!</b>\n\n"
                     f"Продолжаем с вопроса {current_question}/10:\n\n"
@@ -598,9 +622,9 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
             else:
                 # Нет истории — генерируем первый вопрос
                 from src.ai.client import generate_question
-                
+
                 await callback.message.edit_text("🔄 Восстанавливаю сессию...")
-                
+
                 question = await generate_question(
                     role=db_session.role,
                     role_name=db_session.role_name,
@@ -609,20 +633,20 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
                     conversation_history=[],
                     analysis_history=[],
                 )
-                
+
                 await state.update_data(
                     current_question=1,
                     current_question_text=question,
                 )
-                
+
                 await callback.message.edit_text(
                     f"✅ <b>Сессия восстановлена!</b>\n\n"
                     f"<b>Вопрос 1/10</b>\n\n{question}",
                 )
-            
+
             await state.set_state(DiagnosticStates.answering)
             logger.info(f"Session {session_id} recovered, question {current_question}")
-            
+
     except Exception as e:
         logger.error(f"Failed to recover session: {e}")
         await callback.answer("❌ Ошибка восстановления", show_alert=True)
@@ -632,7 +656,7 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
             reply_markup=get_role_keyboard(),
         )
         await state.set_state(DiagnosticStates.choosing_role)
-    
+
     await callback.answer()
 
 
@@ -642,10 +666,10 @@ async def restart_fresh(callback: CallbackQuery, state: FSMContext):
     from src.db.repositories import get_active_session
     from sqlalchemy import update
     from src.db.models import DiagnosticSession
-    
+
     data = await state.get_data()
     db_user_id = data.get("db_user_id")
-    
+
     # Помечаем старую сессию как abandoned
     if db_user_id:
         try:
@@ -662,12 +686,12 @@ async def restart_fresh(callback: CallbackQuery, state: FSMContext):
                     logger.info(f"Session {active.id} marked as abandoned")
         except Exception as e:
             logger.error(f"Failed to abandon session: {e}")
-    
+
     await state.clear()
-    
+
     if db_user_id:
         await state.update_data(db_user_id=db_user_id)
-    
+
     await callback.message.edit_text(
         WELCOME_TEXT,
         reply_markup=get_role_keyboard(),
@@ -689,7 +713,7 @@ MAIN_MENU_TEXT = """
 async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню."""
     await state.clear()
-    
+
     # Восстанавливаем db_user_id если есть
     try:
         async with get_session() as db:
@@ -702,7 +726,7 @@ async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
             await state.update_data(db_user_id=user.id)
     except Exception:
         pass
-    
+
     await callback.message.edit_text(
         MAIN_MENU_TEXT,
         reply_markup=get_role_keyboard(),
@@ -713,29 +737,30 @@ async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
 
 # ==================== CANCEL COMMAND ====================
 
+
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
     """Отмена текущей диагностики."""
     current_state = await state.get_state()
-    
+
     if current_state is None:
         await message.answer(
             "🤷 Нечего отменять — ты не в процессе диагностики.",
             reply_markup=get_back_to_menu_keyboard(),
         )
         return
-    
+
     # Получаем данные для сохранения статуса
     data = await state.get_data()
     db_session_id = data.get("db_session_id")
     current_question = data.get("current_question", 0)
-    
+
     # Помечаем сессию как abandoned
     if db_session_id:
         try:
             from sqlalchemy import update
             from src.db.models import DiagnosticSession
-            
+
             async with get_session() as db:
                 stmt = (
                     update(DiagnosticSession)
@@ -744,13 +769,15 @@ async def cmd_cancel(message: Message, state: FSMContext):
                 )
                 await db.execute(stmt)
                 await db.commit()
-                logger.info(f"Session {db_session_id} cancelled at question {current_question}")
+                logger.info(
+                    f"Session {db_session_id} cancelled at question {current_question}"
+                )
         except Exception as e:
             logger.error(f"Failed to mark session as cancelled: {e}")
-    
+
     # Очищаем state
     await state.clear()
-    
+
     await message.answer(
         f"❌ <b>Диагностика отменена</b>\n\n"
         f"Прогресс: {current_question}/10 вопросов\n"
