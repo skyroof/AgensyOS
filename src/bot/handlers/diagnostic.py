@@ -26,6 +26,8 @@ from src.bot.keyboards.inline import (
     get_question_keyboard,
     get_oto_keyboard,
     get_after_share_keyboard,
+    get_report_sections_keyboard,
+    get_back_to_report_menu_keyboard,
 )
 from src.core.prices import SHARE_PROMO_CODE
 from src.db.repositories import balance_repo
@@ -753,7 +755,7 @@ async def share_callback(callback: CallbackQuery):
     # Текст для шеринга
     share_text = (
         "Я прошел AI-диагностику компетенций и получил детальный разбор своих навыков! "
-        "Попробуй тоже: @DeepDiagnosticBot"
+        "Попробуй тоже: @VISUALMAXAGENCY_BOT"
     )
     
     # Ссылка для копирования
@@ -1340,8 +1342,8 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             await callback.message.answer(
                 "🔥 <b>Специальное предложение!</b>\n\n"
                 "Только сейчас: пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n\n"
-                "Обычная цена: <s>699₽</s>\n"
-                "<b>Твоя цена: 490₽</b>\n\n"
+                "Обычная цена: <s>990₽</s>\n"
+                "<b>Твоя цена: 690₽</b>\n\n"
                 "<i>Предложение действует 15 минут.</i>",
                 reply_markup=get_oto_keyboard(),
             )
@@ -1486,6 +1488,9 @@ def generate_demo_summary_card(data: dict, scores: dict, profile) -> str:
     else:
         worst_metric = "Системное мышление"
         worst_score = 4.5
+
+    # Blurred lines for hidden metrics (Visual Hook)
+    blurred_lines = "\n".join([f"🔒 <tg-spoiler>████████████</tg-spoiler> • <tg-spoiler>?.?</tg-spoiler>/10" for _ in range(6)])
     
     return f"""🎁 <b>ДЕМО-РЕЗУЛЬТАТ</b>
 
@@ -1499,38 +1504,27 @@ def generate_demo_summary_card(data: dict, scores: dict, profile) -> str:
 
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>✅ Открытые метрики (2/12):</b>
-
-🟢 {best_metric}: <b>{best_score:.1f}/10</b>
-🔴 {worst_metric}: <b>{worst_score:.1f}/10</b>
-
-━━━━━━━━━━━━━━━━━━━━
-
-<b>🔒 Скрытые метрики (10):</b>
-
-├─ Системное мышление: ???
-├─ Лидерство: ???
-├─ Эмпатия: ???
-├─ Критическое мышление: ???
-├─ Адаптивность: ???
-├─ Навыки презентации: ???
-├─ Технические навыки: ???
-├─ Управление проектами: ???
-├─ Стратегическое видение: ???
-└─ Инновационность: ???
+<b>🔓 ОТКРЫТО:</b>
+✅ <b>{best_metric}</b>: {best_score:.1f}/10 (Твоя супер-сила!)
+⚠️ <b>{worst_metric}</b>: {worst_score:.1f}/10 (Зона роста)
 
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>🔒 Также недоступно в демо:</b>
-
-├─ 📄 PDF-отчёт уровня McKinsey
-├─ 📈 Детальный профиль компетенций
-├─ 🎯 30-дневный план развития
-└─ 📊 Сравнение с рынком
+<b>🔒 СКРЫТО (в полной версии):</b>
+{blurred_lines}
+<i>...и ещё 4 метрики</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 
-🔥 <b>Открой полную версию и узнай все 12 метрик!</b>"""
+<b>ЧТО ТЫ ПОЛУЧИШЬ ЗА 390₽:</b>
+✅ Полный профиль (12 метрик)
+✅ Сравнение с рынком (Middle/Senior)
+✅ Персональный план развития (PDP)
+✅ PDF-отчёт на 15 страниц
+
+━━━━━━━━━━━━━━━━━━━━
+
+🔥 <b>Открой полную версию прямо сейчас!</b>"""
 
 
 def generate_score_header(data: dict, scores: dict) -> str:
@@ -1761,50 +1755,61 @@ async def skip_feedback_comment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("show:report:"))
 async def show_detailed_report(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Показать детальный AI-анализ — автоматическое разбиение на части."""
+    """Показать детальный AI-отчёт — меню разделов."""
     session_id = int(callback.data.split(":")[2])
     data = await state.get_data()
     
     report = data.get("result_report")
-    header = data.get("result_header", "")
-    
     if not report:
         await callback.answer("⚠️ Отчёт недоступен", show_alert=True)
         return
     
-    await callback.answer("📊 Загружаю...")
+    # Парсим на блоки
+    sections = split_report_into_blocks(report)
     
-    # Объединяем header + report
-    full_text = f"{header}\n\n{report}" if header else report
-    full_text = sanitize_html(full_text)
+    # Сохраняем в state для навигации
+    await state.update_data(report_sections=sections)
     
-    # === ДИАГНОСТИКА ДЛИНЫ СООБЩЕНИЙ ===
-    logger.info(f"[MSG_LEN] show_detailed_report: header={len(header)}, report={len(report)}, total={len(full_text)}")
+    await callback.message.edit_text(
+        "📑 <b>ДЕТАЛЬНЫЙ АНАЛИЗ</b>\n\n"
+        "Я разбил твой отчёт на ключевые разделы.\n"
+        "Выбери, что хочешь изучить:",
+        reply_markup=get_report_sections_keyboard(session_id, sections)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("report_section:"))
+async def show_report_section(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Показать конкретный раздел отчёта."""
+    _, session_id, section_index = callback.data.split(":")
+    session_id = int(session_id)
+    section_index = int(section_index)
     
-    # Используем умное разбиение вместо обрезки
-    try:
-        await send_with_continuation(
-            bot=bot,
-            chat_id=callback.message.chat.id,
-            text=full_text,
-            reply_markup=get_back_to_summary_keyboard(session_id),
-            continuation_text="📊 <i>Продолжение отчёта...</i>",
-        )
-    except Exception as e:
-        logger.error(f"[MSG_LEN] Failed to send report: {e}")
-        # Fallback — отправляем обрезанную версию
-        try:
-            short_text = full_text[:3500]
-            last_dot = max(short_text.rfind('.'), short_text.rfind('!'), short_text.rfind('\n\n'))
-            if last_dot > 2000:
-                short_text = short_text[:last_dot + 1]
-            short_text += "\n\n<i>📄 Полный отчёт доступен в PDF</i>"
-            await callback.message.answer(
-                short_text,
-                reply_markup=get_back_to_summary_keyboard(session_id),
-            )
-        except Exception as e2:
-            logger.error(f"Fallback also failed: {e2}")
+    data = await state.get_data()
+    sections = data.get("report_sections")
+    
+    # Если разделов нет в state (например, после перезагрузки), парсим заново
+    if not sections:
+        report = data.get("result_report")
+        if report:
+            sections = split_report_into_blocks(report)
+            await state.update_data(report_sections=sections)
+    
+    if not sections or section_index >= len(sections):
+        await callback.answer("⚠️ Раздел недоступен", show_alert=True)
+        return
+        
+    section = sections[section_index]
+    
+    text = f"{section['emoji']} <b>{section['title']}</b>\n\n{section['content']}"
+    text = sanitize_html(text)
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_back_to_report_menu_keyboard(session_id)
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("show:profile:"))

@@ -194,6 +194,9 @@ class PdpPlan(Base):
     badges: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True
     )  # Полученные бейджи
+    reflections: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True
+    )  # Еженедельная рефлексия { "1": {"difficulty": "hard", "text": "..."} }
 
     # Временные метки
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -243,6 +246,9 @@ class PdpTask(Base):
     task_type: Mapped[str] = mapped_column(
         String(20)
     )  # read/watch/practice/reflect/discuss
+
+    # Геймификация
+    xp: Mapped[int] = mapped_column(Integer, default=10)
 
     # Ресурс (опционально)
     resource_type: Mapped[Optional[str]] = mapped_column(
@@ -335,6 +341,29 @@ class DiagnosticReminder(Base):
 
     def __repr__(self) -> str:
         return f"<DiagnosticReminder user={self.user_id} scheduled={self.scheduled_at} sent={self.sent}>"
+
+
+class TaskReminder(Base):
+    """
+    Напоминание о конкретной задаче PDP.
+    """
+
+    __tablename__ = "task_reminders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("pdp_tasks.id"), index=True)
+
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    sent: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relations
+    user: Mapped["User"] = relationship()
+    task: Mapped["PdpTask"] = relationship()
+
+    def __repr__(self) -> str:
+        return f"<TaskReminder task={self.task_id} at={self.scheduled_at}>"
 
 
 class UserSettings(Base):

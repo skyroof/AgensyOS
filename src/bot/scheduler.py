@@ -20,6 +20,8 @@ from src.db.repositories.reminder_repo import (
     get_pending_reminders_with_users,
     mark_reminder_sent,
     user_has_recent_diagnostic,
+    get_pending_task_reminders,
+    mark_task_reminder_sent,
 )
 from src.db.models import DiagnosticSession
 
@@ -336,6 +338,59 @@ async def send_daily_pdp_tasks(bot: Bot) -> int:
     return sent_count
 
 
+async def send_task_reminders(bot: Bot) -> int:
+    """
+    Отправка конкретных напоминаний о задачах (Remind Later).
+    """
+    sent_count = 0
+    try:
+        async with get_session() as db:
+            reminders = await get_pending_task_reminders(db)
+            
+            for reminder in reminders:
+                try:
+                    task = reminder.task
+                    if not reminder.user or not reminder.user.telegram_id:
+                        await mark_task_reminder_sent(db, reminder.id)
+                        continue
+                        
+                    telegram_id = reminder.user.telegram_id
+                    
+                    text = f"""⏰ <b>Напоминание о задаче</b>
+                    
+🎯 <b>{task.title}</b>
+<i>{task.skill_name}</i>
+
+{task.description[:200]}{'...' if len(task.description) > 200 else ''}
+
+<i>Ты просил напомнить. Готов сделать?</i>"""
+
+                    keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [InlineKeyboardButton(text="👀 Открыть задачу", callback_data=f"pdp:view_task:{task.id}:{task.plan_id}")],
+                            [InlineKeyboardButton(text="✅ Сделано", callback_data=f"pdp:done:{task.id}:{task.plan_id}")]
+                        ]
+                    )
+                    
+                    await bot.send_message(chat_id=telegram_id, text=text, reply_markup=keyboard)
+                    
+                    await mark_task_reminder_sent(db, reminder.id)
+                    sent_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"Failed to send task reminder {reminder.id}: {e}")
+                    # If user blocked bot, mark as sent to avoid loop
+                    if "Forbidden" in str(e) or "blocked" in str(e):
+                         await mark_task_reminder_sent(db, reminder.id)
+
+            await db.commit()
+            
+    except Exception as e:
+        logger.error(f"Error in send_task_reminders: {e}")
+        
+    return sent_count
+
+
 async def scheduler_loop(bot: Bot):
     """Основной цикл планировщика."""
     logger.info("Scheduler tick...")
@@ -345,6 +400,9 @@ async def scheduler_loop(bot: Bot):
 
     # 2. Daily PDP tasks
     await send_daily_pdp_tasks(bot)
+    
+    # 3. Task Reminders (Remind Later)
+    await send_task_reminders(bot)
 
 
 async def run_weekly_digest_job(bot: Bot):

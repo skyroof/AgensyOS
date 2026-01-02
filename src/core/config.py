@@ -57,9 +57,9 @@ class Settings(BaseSettings):
     )
     
     # Pricing (in kopecks/cents)
-    price_single: int = Field(default=29900, description="Price for 1 diagnostic in kopecks")
-    price_pack3: int = Field(default=69900, description="Price for 3 diagnostics in kopecks")
-    price_pack10: int = Field(default=199000, description="Price for 10 diagnostics in kopecks")
+    price_single: int = Field(default=39000, description="Price for 1 diagnostic in kopecks")
+    price_pack3: int = Field(default=99000, description="Price for 3 diagnostics in kopecks")
+    price_pack10: int = Field(default=249000, description="Price for 10 diagnostics in kopecks")
     
     # Admin
     admin_telegram_id: int = Field(

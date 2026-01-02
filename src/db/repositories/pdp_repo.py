@@ -83,6 +83,7 @@ async def create_and_fill_pdp_plan(
                         "description": task.description,
                         "duration_minutes": task.duration_minutes,
                         "task_type": task.task_type,
+                        "xp": task.xp,
                         "resource_type": task.resource_type,
                         "resource_title": task.resource_title,
                         "resource_url": task.resource_url,
@@ -144,6 +145,34 @@ async def update_pdp_progress(
     await session.execute(stmt)
 
 
+async def update_pdp_reflection(
+    session: AsyncSession,
+    plan_id: int,
+    week_number: int,
+    reflection_data: dict,
+) -> None:
+    """Обновить данные рефлексии в плане."""
+    # Получаем текущий план
+    stmt = select(PdpPlan).where(PdpPlan.id == plan_id)
+    result = await session.execute(stmt)
+    plan = result.scalar_one_or_none()
+
+    if not plan:
+        return
+
+    # Обновляем JSON
+    current_reflections = dict(plan.reflections) if plan.reflections else {}
+    current_reflections[str(week_number)] = reflection_data
+
+    # Сохраняем (используем update для явного изменения поля)
+    stmt = (
+        update(PdpPlan)
+        .where(PdpPlan.id == plan_id)
+        .values(reflections=current_reflections)
+    )
+    await session.execute(stmt)
+
+
 async def complete_pdp_plan(
     session: AsyncSession,
     plan_id: int,
@@ -175,6 +204,7 @@ async def add_pdp_task(
     description: str,
     duration_minutes: int,
     task_type: str,
+    xp: int = 10,
     resource_type: Optional[str] = None,
     resource_title: Optional[str] = None,
     resource_url: Optional[str] = None,
@@ -191,6 +221,7 @@ async def add_pdp_task(
         description=description,
         duration_minutes=duration_minutes,
         task_type=task_type,
+        xp=xp,
         resource_type=resource_type,
         resource_title=resource_title,
         resource_url=resource_url,
@@ -248,6 +279,16 @@ async def get_tasks_for_week(
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def get_task_by_id(
+    session: AsyncSession,
+    task_id: int,
+) -> Optional[PdpTask]:
+    """Получить задачу по ID."""
+    stmt = select(PdpTask).where(PdpTask.id == task_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 async def complete_task(
@@ -398,89 +439,44 @@ async def add_badge(
         "name": badge_name,
         "earned_at": datetime.utcnow().isoformat(),
     }
-
-    await update_pdp_progress(session, plan_id, badges=badges)
+    
+    # Важно: обновить словарь в БД
+    stmt = (
+        update(PdpPlan)
+        .where(PdpPlan.id == plan_id)
+        .values(badges=badges)
+    )
+    await session.execute(stmt)
+    
     return True
 
 
-async def get_active_plans_for_daily_push(session: AsyncSession) -> list[PdpPlan]:
-    """
-    Получить активные планы пользователей с действующей подпиской.
-    """
-    from src.db.models import UserSubscription
-
-    now = datetime.utcnow()
-
-    stmt = (
-        select(PdpPlan)
-        .join(UserSubscription, PdpPlan.user_id == UserSubscription.user_id)
-        .where(PdpPlan.status == "active")
-        .where(UserSubscription.is_active.is_(True))
-        .where(UserSubscription.end_date > now)
-    )
-
-    result = await session.execute(stmt)
-    return list(result.scalars().all())
-
-
-# ==================== REMINDERS ====================
-
-
-async def process_daily_transition(
+async def get_pdp_stats(
     session: AsyncSession,
     plan_id: int,
-    new_day: int,
-) -> None:
-    """
-    Обработать переход на новый день.
-
-    - Пропускает задачи прошлых дней
-    - Обновляет стрик
-    - Обновляет текущий день
-    """
+) -> dict:
+    """Получить статистику плана."""
     plan = await get_pdp_plan_by_id(session, plan_id)
-    if not plan or plan.current_day >= new_day:
-        return
+    if not plan:
+        return {}
 
-    skipped_count = 0
-    streak_broken = False
+    # Считаем задачи
+    total = await session.scalar(
+        select(select(PdpTask).where(PdpTask.plan_id == plan_id).count())
+    )
+    completed = await session.scalar(
+        select(select(PdpTask).where(PdpTask.plan_id == plan_id).where(PdpTask.status == "completed").count())
+    )
 
-    # Проходим по всем дням, начиная с текущего записанного до (new_day - 1)
-    # Например, если было day=1, а стало day=3.
-    # Мы проверяем day=1 (вдруг вчера не зашел) и day=2 (пропустил).
-    # Но если day=1 был completed, то все ок.
-    # Если day=1 висит pending — значит пропустил.
-
-    for day in range(plan.current_day, new_day):
-        week = (day - 1) // 7 + 1
-        tasks = await get_tasks_for_day(session, plan_id, week, day)
-
-        day_has_tasks = len(tasks) > 0
-        day_completed = False
-
-        for task in tasks:
-            if task.status == "completed":
-                day_completed = True
-            elif task.status in ["pending", "sent"]:
-                # Автоматически пропускаем старые задачи
-                await skip_task(session, task.id, note="Auto-skipped by scheduler")
-                skipped_count += 1
-
-        # Если были задачи, но ни одна не выполнена — стрик сбрасывается
-        if day_has_tasks and not day_completed:
-            streak_broken = True
-
-    # Обновляем план
-    values = {
-        "current_day": new_day,
-        "current_week": (new_day - 1) // 7 + 1,
-        "skipped_tasks": plan.skipped_tasks + skipped_count,
+    return {
+        "total_tasks": total,
+        "completed_tasks": completed,
+        "completion_rate": int(completed / total * 100) if total > 0 else 0,
+        "current_week": plan.current_week,
+        "current_streak": plan.current_streak,
+        "total_points": plan.total_points,
+        "badges_count": len(plan.badges) if plan.badges else 0,
     }
-
-    if streak_broken:
-        values["current_streak"] = 0
-
-    await update_pdp_progress(session, plan_id, **values)
 
 
 async def get_or_create_reminder(
@@ -491,17 +487,12 @@ async def get_or_create_reminder(
     stmt = select(PdpReminder).where(PdpReminder.user_id == user_id)
     result = await session.execute(stmt)
     reminder = result.scalar_one_or_none()
-
+    
     if not reminder:
-        reminder = PdpReminder(
-            user_id=user_id,
-            enabled=True,
-            reminder_time="10:00",
-            timezone="Europe/Moscow",
-        )
+        reminder = PdpReminder(user_id=user_id)
         session.add(reminder)
         await session.flush()
-
+        
     return reminder
 
 
@@ -510,7 +501,6 @@ async def update_reminder_settings(
     user_id: int,
     enabled: Optional[bool] = None,
     reminder_time: Optional[str] = None,
-    timezone: Optional[str] = None,
 ) -> None:
     """Обновить настройки напоминаний."""
     values = {}
@@ -518,73 +508,49 @@ async def update_reminder_settings(
         values["enabled"] = enabled
     if reminder_time is not None:
         values["reminder_time"] = reminder_time
-    if timezone is not None:
-        values["timezone"] = timezone
-
-    if values:
-        stmt = (
-            update(PdpReminder).where(PdpReminder.user_id == user_id).values(**values)
-        )
-        await session.execute(stmt)
-
-
-async def get_users_for_reminder(
-    session: AsyncSession,
-    current_hour: int,
-    current_minute: int,
-) -> list[int]:
-    """
-    Получить user_id для отправки напоминаний.
-
-    Возвращает telegram_id пользователей, которым нужно отправить напоминание.
-    """
-    time_str = f"{current_hour:02d}:{current_minute:02d}"
+        
+    if not values:
+        return
 
     stmt = (
-        select(User.telegram_id)
-        .join(PdpReminder, PdpReminder.user_id == User.id)
-        .join(PdpPlan, PdpPlan.user_id == User.id)
-        .where(PdpReminder.enabled.is_(True))
-        .where(PdpReminder.reminder_time == time_str)
-        .where(PdpPlan.status == "active")
+        update(PdpReminder)
+        .where(PdpReminder.user_id == user_id)
+        .values(**values)
     )
+    await session.execute(stmt)
 
+
+async def get_active_plans_for_daily_push(session: AsyncSession) -> list[PdpPlan]:
+    """Получить активные планы для рассылки."""
+    now = datetime.utcnow()
+    current_time = now.strftime("%H:%M")
+    
+    stmt = (
+        select(PdpPlan)
+        .join(PdpReminder, PdpPlan.user_id == PdpReminder.user_id)
+        .where(PdpPlan.status == "active")
+        .where(PdpReminder.enabled == True)
+        .where(PdpReminder.reminder_time == current_time)
+        .options(selectinload(PdpPlan.tasks))
+    )
     result = await session.execute(stmt)
-    return [row[0] for row in result.all()]
+    return list(result.scalars().all())
 
 
-# ==================== STATISTICS ====================
-
-
-async def get_pdp_stats(
+async def process_daily_transition(
     session: AsyncSession,
     plan_id: int,
-) -> dict:
-    """Получить статистику по плану."""
-    plan = await get_pdp_plan_by_id(session, plan_id)
-    if not plan:
-        return {}
-
-    # Считаем задачи
-    tasks = plan.tasks if plan.tasks else []
-    completed = sum(1 for t in tasks if t.status == "completed")
-    skipped = sum(1 for t in tasks if t.status == "skipped")
-    pending = sum(1 for t in tasks if t.status == "pending")
-    total = len(tasks)
-
-    # Процент выполнения
-    completion_rate = (completed / total * 100) if total > 0 else 0
-
-    return {
-        "total_tasks": total,
-        "completed_tasks": completed,
-        "skipped_tasks": skipped,
-        "pending_tasks": pending,
-        "completion_rate": round(completion_rate, 1),
-        "current_week": plan.current_week,
-        "current_day": plan.current_day,
-        "current_streak": plan.current_streak,
-        "best_streak": plan.best_streak,
-        "total_points": plan.total_points,
-        "badges_count": len(plan.badges) if plan.badges else 0,
-    }
+    day_number: int,
+) -> None:
+    """Обработать переход на новый день."""
+    week_number = (day_number - 1) // 7 + 1
+    
+    stmt = (
+        update(PdpPlan)
+        .where(PdpPlan.id == plan_id)
+        .values(
+            current_day=day_number,
+            current_week=week_number,
+        )
+    )
+    await session.execute(stmt)

@@ -5,6 +5,7 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.filters import Command
+from aiogram.enums import ChatAction
 
 from src.db import get_session
 from src.db.repositories import (
@@ -88,7 +89,7 @@ async def cmd_history(message: Message, bot: Bot):
 async def cmd_help(message: Message):
     """Показать справку."""
     help_text = """
-🎯 <b>Deep Diagnostic Bot</b>
+🎯 <b>MAX Diagnostic Bot</b>
 
 Я оцениваю уровень дизайнеров и продактов за 10 глубоких вопросов.
 
@@ -553,13 +554,15 @@ async def process_pdf_download(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("share:"))
-async def process_share_card(callback: CallbackQuery):
+async def process_share_card(callback: CallbackQuery, bot: Bot):
     """Генерация и отправка Share Card (PNG) для соцсетей."""
-    await callback.answer("📤 Создаю картинку...")
+    await callback.answer("⏳ Рисую...", show_alert=False)
     
     session_id = int(callback.data.split(":")[1])
     
     try:
+        await bot.send_chat_action(callback.message.chat.id, ChatAction.UPLOAD_PHOTO)
+        
         async with get_session() as db:
             from src.db.repositories import get_session_by_id
             
@@ -569,7 +572,8 @@ async def process_share_card(callback: CallbackQuery):
                 await callback.message.answer("❌ Сессия не найдена.")
                 return
             
-            status_msg = await callback.message.answer("🎨 Генерирую карточку для шаринга...")
+            status_msg = await callback.message.answer("🎨 <b>Генерирую красивую картинку...</b>\n<i>Это займет пару секунд</i>")
+            await bot.send_chat_action(callback.message.chat.id, ChatAction.UPLOAD_PHOTO)
             
             try:
                 from src.utils.share_card import generate_share_card

@@ -202,6 +202,39 @@ def get_result_summary_keyboard(session_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_report_sections_keyboard(session_id: int, sections: list[dict]) -> InlineKeyboardMarkup:
+    """Клавиатура с разделами отчёта."""
+    builder = InlineKeyboardBuilder()
+    
+    # Кнопки для каждой секции (по 2 в ряд)
+    for i, section in enumerate(sections):
+        builder.add(InlineKeyboardButton(
+            text=f"{section['emoji']} {section['title']}",
+            callback_data=f"report_section:{session_id}:{i}"
+        ))
+    
+    builder.adjust(2)  # 2 кнопки в ряд
+    
+    # Дополнительные действия
+    builder.row(
+        InlineKeyboardButton(text="📄 Скачать PDF", callback_data=f"pdf:{session_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ К результатам", callback_data=f"show:summary:{session_id}"),
+    )
+    
+    return builder.as_markup()
+
+
+def get_back_to_report_menu_keyboard(session_id: int) -> InlineKeyboardMarkup:
+    """Кнопка возврата к меню отчёта."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="◀️ К разделам", callback_data=f"show:report:{session_id}"),
+    )
+    return builder.as_markup()
+
+
 def get_back_to_summary_keyboard(session_id: int) -> InlineKeyboardMarkup:
     """Кнопка возврата к summary после просмотра блока."""
     builder = InlineKeyboardBuilder()
@@ -355,16 +388,16 @@ def get_buy_keyboard(show_promo_applied: bool = False) -> InlineKeyboardMarkup:
     """Клавиатура с тарифами для покупки — красивые кнопки с ценами."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="🛒 Купить 1 диагностику • 299 ₽", callback_data="buy:single"),
+        InlineKeyboardButton(text="🛒 Купить 1 диагностику • 390 ₽", callback_data="buy:single"),
     )
     builder.row(
-        InlineKeyboardButton(text="📦 Пакет 3 шт • 699 ₽", callback_data="buy:pack3"),
+        InlineKeyboardButton(text="📦 Пакет 3 шт • 990 ₽", callback_data="buy:pack3"),
     )
     builder.row(
-        InlineKeyboardButton(text="📦 Пакет 10 шт • 1 990 ₽", callback_data="buy:pack10"),
+        InlineKeyboardButton(text="📦 Пакет 10 шт • 2 490 ₽", callback_data="buy:pack10"),
     )
     builder.row(
-        InlineKeyboardButton(text="⭐ Карьерный Трекер (1 мес) • 199 ₽", callback_data="buy:subscription_1m"),
+        InlineKeyboardButton(text="⭐ Карьерный Трекер (1 мес) • 490 ₽", callback_data="buy:subscription_1m"),
     )
     if show_promo_applied:
         builder.row(
@@ -406,7 +439,7 @@ def get_paywall_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура paywall — нет доступа."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="🔓 Открыть полную версию — 299₽", callback_data="buy:single"),
+        InlineKeyboardButton(text="🔓 Открыть полную версию — 390₽", callback_data="buy:single"),
     )
     builder.row(
         InlineKeyboardButton(text="📦 Все тарифы", callback_data="show_pricing"),
@@ -436,7 +469,7 @@ def get_demo_result_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура после демо-диагностики — агрессивный CTA."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="🔓 Открыть все 12 метрик — 299₽", callback_data="buy:single"),
+        InlineKeyboardButton(text="🔓 Открыть все 12 метрик — 390₽", callback_data="buy:single"),
     )
     builder.row(
         InlineKeyboardButton(text="📦 Другие тарифы", callback_data="show_pricing"),

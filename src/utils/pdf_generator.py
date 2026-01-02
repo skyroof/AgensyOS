@@ -1223,9 +1223,9 @@ def generate_pdf_report(
         if thinking_style or comm_style:
             styles_data = []
             if thinking_style:
-                styles_data.append(["Стиль мышления:", thinking_style[:80]])
+                styles_data.append(["Стиль мышления:", Paragraph(thinking_style, body_style)])
             if comm_style:
-                styles_data.append(["Коммуникация:", comm_style[:80]])
+                styles_data.append(["Коммуникация:", Paragraph(comm_style, body_style)])
             
             styles_table = Table(styles_data, colWidths=[40*mm, 110*mm])
             styles_table.setStyle(TableStyle([

@@ -5,9 +5,60 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import DiagnosticReminder, UserSettings, DiagnosticSession, User
+from src.db.models import DiagnosticReminder, UserSettings, DiagnosticSession, User, TaskReminder, PdpTask
+
+
+# ==================== TASK REMINDERS ====================
+
+
+async def schedule_task_reminder(
+    session: AsyncSession,
+    user_id: int,
+    task_id: int,
+    reminder_time: datetime,
+) -> TaskReminder:
+    """Запланировать напоминание о задаче PDP."""
+    reminder = TaskReminder(
+        user_id=user_id,
+        task_id=task_id,
+        scheduled_at=reminder_time,
+        sent=False,
+    )
+    session.add(reminder)
+    await session.flush()
+    return reminder
+
+
+async def get_pending_task_reminders(
+    session: AsyncSession,
+) -> list[TaskReminder]:
+    """Получить задачи, о которых пора напомнить."""
+    now = datetime.utcnow()
+    stmt = (
+        select(TaskReminder)
+        .options(selectinload(TaskReminder.task), selectinload(TaskReminder.user))  # Подгружаем задачу и юзера
+        .where(TaskReminder.sent.is_(False))
+        .where(TaskReminder.scheduled_at <= now)
+        .limit(100)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def mark_task_reminder_sent(
+    session: AsyncSession,
+    reminder_id: int,
+) -> None:
+    """Отметить напоминание как отправленное."""
+    stmt = (
+        update(TaskReminder)
+        .where(TaskReminder.id == reminder_id)
+        .values(sent=True)
+    )
+    await session.execute(stmt)
 
 
 # ==================== DIAGNOSTIC REMINDERS ====================

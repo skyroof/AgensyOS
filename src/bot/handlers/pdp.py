@@ -7,6 +7,7 @@
 - Прогресс и геймификация
 """
 import logging
+from datetime import datetime, timedelta
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -23,6 +24,7 @@ from src.db.repositories.pdp_repo import (
     add_tasks_batch,
     get_today_task,
     get_tasks_for_week,
+    get_task_by_id,
     complete_task,
     skip_task,
     update_streak,
@@ -33,6 +35,7 @@ from src.db.repositories.pdp_repo import (
     get_or_create_reminder,
     update_reminder_settings,
 )
+from src.db.repositories.reminder_repo import schedule_task_reminder
 from src.analytics.pdp_generator import (
     generate_pdp_plan,
     format_pdp_plan_text,
@@ -91,6 +94,7 @@ def get_task_keyboard(task_id: int, plan_id: int) -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="📝 Добавить заметку", callback_data=f"pdp:note:{task_id}:{plan_id}"),
+        InlineKeyboardButton(text="⏰ Напомнить", callback_data=f"pdp:remind_menu:{task_id}:{plan_id}"),
     )
     builder.row(
         InlineKeyboardButton(text="◀️ К плану", callback_data=f"pdp:main:{plan_id}"),
@@ -346,6 +350,7 @@ async def choose_style_and_create(callback: CallbackQuery, state: FSMContext, bo
                         "resource_type": task.resource_type,
                         "resource_title": task.resource_title,
                         "resource_url": task.resource_url,
+                        "xp": task.xp,
                         "status": "pending",
                     })
         
@@ -446,6 +451,54 @@ async def show_today_task(callback: CallbackQuery):
         )
 
 
+@router.callback_query(F.data.startswith("pdp:view_task:"))
+async def show_specific_task(callback: CallbackQuery):
+    """Показать конкретную задачу."""
+    await callback.answer()
+    
+    parts = callback.data.split(":")
+    task_id = int(parts[2])
+    plan_id = int(parts[3])
+    
+    async with get_session() as db:
+        task = await get_task_by_id(db, task_id)
+        
+        if not task:
+            await callback.message.edit_text(
+                "❌ Задача не найдена.",
+                reply_markup=get_back_to_pdp_keyboard(plan_id),
+            )
+            return
+        
+        type_name = TASK_TYPES.get(task.task_type, "📌 Задача")
+        
+        text = f"""📅 <b>ЗАДАЧА</b>
+
+<b>{type_name}</b>
+<b>{task.title}</b>
+
+{task.description}
+
+⏱ <b>Время:</b> {task.duration_minutes} мин
+🎯 <b>Навык:</b> {task.skill_name}"""
+        
+        if task.resource_title:
+            text += f"\n\n📚 <b>Ресурс:</b> {task.resource_title}"
+            if task.resource_url:
+                text += f"\n🔗 {task.resource_url}"
+        
+        # Если задача выполнена, показываем соответствующий статус
+        if task.status == "completed":
+             text += "\n\n✅ <b>Выполнено!</b>"
+        elif task.status == "skipped":
+             text += "\n\n⏭️ <b>Пропущено.</b>"
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_task_keyboard(task.id, plan_id),
+        )
+
+
 @router.callback_query(F.data.startswith("pdp:week:"))
 async def show_week_plan(callback: CallbackQuery, bot: Bot):
     """Показать план на неделю."""
@@ -519,6 +572,12 @@ async def mark_task_done(callback: CallbackQuery):
     await callback.answer("✅ Отлично!")
     
     async with get_session() as db:
+        # Получаем задачу для XP
+        task = await get_task_by_id(db, task_id)
+        if not task:
+            await callback.message.edit_text("❌ Задача не найдена")
+            return
+
         # Выполняем задачу
         await complete_task(db, task_id)
         
@@ -533,7 +592,7 @@ async def mark_task_done(callback: CallbackQuery):
         streak_result = await update_streak(db, plan_id, completed_today=True)
         
         # Добавляем очки
-        points = 10
+        points = task.xp
         if streak_result['current_streak'] >= 3:
             points += 5  # Бонус за streak
         new_total = await add_points(db, plan_id, points)
@@ -609,6 +668,65 @@ async def skip_task_callback(callback: CallbackQuery):
         "Ничего страшного! Главное — не бросать совсем.\n\n"
         "<i>Может, сделаешь завтра?</i>",
         reply_markup=get_back_to_pdp_keyboard(plan_id),
+    )
+
+
+@router.callback_query(F.data.startswith("pdp:remind_menu:"))
+async def remind_menu_callback(callback: CallbackQuery):
+    """Меню выбора времени напоминания."""
+    parts = callback.data.split(":")
+    task_id = int(parts[2])
+    plan_id = int(parts[3])
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🕐 Через 1 час", callback_data=f"pdp:remind_set:{task_id}:{plan_id}:60"),
+        InlineKeyboardButton(text="🕒 Через 3 часа", callback_data=f"pdp:remind_set:{task_id}:{plan_id}:180"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🌅 Завтра утром", callback_data=f"pdp:remind_set:{task_id}:{plan_id}:tomorrow"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data=f"pdp:main:{plan_id}"),
+    )
+    
+    await callback.message.edit_text(
+        "⏰ <b>Когда напомнить о задаче?</b>",
+        reply_markup=builder.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("pdp:remind_set:"))
+async def remind_set_callback(callback: CallbackQuery):
+    """Установить напоминание."""
+    parts = callback.data.split(":")
+    task_id = int(parts[2])
+    plan_id = int(parts[3])
+    time_val = parts[4]
+    
+    now = datetime.utcnow()
+    
+    if time_val == "tomorrow":
+        # Завтра в 9:00 MSK (6:00 UTC)
+        tomorrow = now + timedelta(days=1)
+        remind_at = tomorrow.replace(hour=6, minute=0, second=0, microsecond=0)
+        if remind_at < now:
+            remind_at += timedelta(days=1)
+    else:
+        minutes = int(time_val)
+        remind_at = now + timedelta(minutes=minutes)
+        
+    async with get_session() as db:
+        user = await get_user_by_telegram_id(db, callback.from_user.id)
+        await schedule_task_reminder(db, user.id, task_id, remind_at)
+        await db.commit()
+        
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="◀️ К плану", callback_data=f"pdp:main:{plan_id}"))
+    
+    await callback.message.edit_text(
+        f"✅ <b>Напоминание установлено!</b>\n\nЯ напомню тебе о задаче {remind_at.strftime('%d.%m в %H:%M')} (UTC).",
+        reply_markup=builder.as_markup()
     )
 
 
@@ -926,7 +1044,7 @@ class ReflectionStates(StatesGroup):
 
 @router.callback_query(F.data.startswith("pdp:reflect:"))
 async def start_reflection(callback: CallbackQuery, state: FSMContext):
-    """Начать рефлексию недели."""
+    """Начать рефлексию недели (шаг 1: оценка сложности)."""
     await callback.answer()
     
     parts = callback.data.split(":")
@@ -934,18 +1052,67 @@ async def start_reflection(callback: CallbackQuery, state: FSMContext):
     plan_id = int(parts[3])
     
     await state.update_data(week_num=week_num, plan_id=plan_id)
-    await state.set_state(ReflectionStates.writing_reflection)
     
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="😅 Было тяжело", callback_data=f"pdp:reflect_diff:hard"),
+        InlineKeyboardButton(text="👌 Нормально", callback_data=f"pdp:reflect_diff:ok"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="😎 Слишком легко", callback_data=f"pdp:reflect_diff:easy"),
+    )
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data=f"pdp:weekly:{week_num}:{plan_id}"))
+
     await callback.message.edit_text(
         f"""📝 <b>РЕФЛЕКСИЯ НЕДЕЛИ {week_num}</b>
 
-Ответь на вопросы (можно кратко):
+Чтобы следующая неделя была эффективнее, оцени нагрузку:""",
+        reply_markup=builder.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("pdp:reflect_diff:"))
+async def handle_reflection_difficulty(callback: CallbackQuery, state: FSMContext):
+    """Обработка оценки сложности и переход к текстовой рефлексии."""
+    difficulty = callback.data.split(":")[2]
+    data = await state.get_data()
+    week_num = data.get("week_num")
+    plan_id = data.get("plan_id")
+    
+    msg_prefix = ""
+    
+    async with get_session() as db:
+        if difficulty == "hard":
+            # Reduce duration for next week tasks
+            from sqlalchemy import update
+            from src.db.models import PdpTask
+            
+            stmt = (
+                update(PdpTask)
+                .where(PdpTask.plan_id == plan_id)
+                .where(PdpTask.week == week_num + 1)
+                .where(PdpTask.status == 'pending')
+                .values(duration_minutes=15)
+            )
+            await db.execute(stmt)
+            await db.commit()
+            msg_prefix = "👌 <b>Понял, снизил нагрузку на следующую неделю.</b>\n\n"
+        elif difficulty == "easy":
+            msg_prefix = "💪 <b>Отлично! В следующей неделе дам задачи посложнее.</b>\n\n"
+        else:
+            msg_prefix = "✅ <b>Супер! Продолжаем в том же темпе.</b>\n\n"
+
+    await state.update_data(difficulty=difficulty)
+    await state.set_state(ReflectionStates.writing_reflection)
+    
+    await callback.message.edit_text(
+        f"""{msg_prefix}📝 <b>А теперь немного мыслей:</b>
 
 1. Что получилось на этой неделе?
 2. Что было сложно?
-3. Что хочешь изменить на следующей неделе?
+3. Что хочешь изменить?
 
-<i>Напиши свои мысли одним сообщением:</i>""",
+<i>Напиши ответ одним сообщением:</i>"""
     )
 
 
@@ -955,11 +1122,23 @@ async def save_reflection(message: Message, state: FSMContext):
     data = await state.get_data()
     week_num = data.get("week_num", 1)
     plan_id = data.get("plan_id")
+    difficulty = data.get("difficulty", "normal")
     
     await state.clear()
     
-    # Сохраняем рефлексию в заметки плана
+    # Сохраняем рефлексию в БД
     async with get_session() as db:
+        from src.db.repositories.pdp_repo import update_pdp_reflection
+        
+        # Сохраняем данные
+        reflection_data = {
+            "difficulty": difficulty,
+            "text": message.text,
+            "date": datetime.utcnow().isoformat()
+        }
+        await update_pdp_reflection(db, plan_id, week_num, reflection_data)
+
+        # Получаем план для начисления бонусов
         plan = await get_active_pdp_plan(db, (await get_user_by_telegram_id(db, message.from_user.id)).id)
         
         if plan:

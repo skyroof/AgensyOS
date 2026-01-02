@@ -353,38 +353,5 @@ def split_report_into_blocks(report: str) -> list[dict]:
                 "content": content,
             })
     
-    # Группируем маленькие блоки (Hard/Soft/Thinking/Mindset)
-    grouped_blocks = []
-    skills_buffer = []
-    
-    for block in blocks:
-        if block["title"] in ["Hard Skills", "Soft Skills", "Мышление", "Mindset"]:
-            skills_buffer.append(block)
-        else:
-            # Если накопились skills — объединяем
-            if skills_buffer:
-                combined_content = "\n\n".join(
-                    f"<b>{b['emoji']} {b['title']}:</b>\n{b['content']}" 
-                    for b in skills_buffer
-                )
-                grouped_blocks.append({
-                    "emoji": "📊",
-                    "title": "Детальная оценка",
-                    "content": combined_content,
-                })
-                skills_buffer = []
-            grouped_blocks.append(block)
-    
-    # Добавляем оставшиеся skills
-    if skills_buffer:
-        combined_content = "\n\n".join(
-            f"<b>{b['emoji']} {b['title']}:</b>\n{b['content']}" 
-            for b in skills_buffer
-        )
-        grouped_blocks.append({
-            "emoji": "📊",
-            "title": "Детальная оценка",
-            "content": combined_content,
-        })
-    
-    return grouped_blocks if grouped_blocks else blocks
+    return blocks
+

@@ -46,6 +46,26 @@ def get_level(score: int) -> tuple[str, str]:
     return "Специалист", "✨"
 
 
+def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Загрузка шрифта с поддержкой кириллицы."""
+    # Приоритетные пути для поиска шрифтов
+    font_paths = [
+        "assets/fonts/Montserrat-Regular.ttf",
+        "C:/Windows/Fonts/arial.ttf",  # Windows
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+        "arial.ttf",
+    ]
+    
+    for path in font_paths:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+            
+    # Fallback (может не поддерживать кириллицу)
+    return ImageFont.load_default()
+
+
 def create_gradient(width: int, height: int, start_color: tuple, end_color: tuple) -> Image.Image:
     """Создание вертикального градиента."""
     gradient = Image.new("RGB", (width, height))
@@ -154,7 +174,7 @@ def draw_score_circle(
     text_height = bbox[3] - bbox[1]
     
     draw.text(
-        (center[0] - text_width // 2, center[1] - text_height // 2 - 10),
+        (center[0] - text_width // 2, center[1] - text_height // 2 - 20),
         score_text,
         font=font_large,
         fill=colors["text_primary"],
@@ -195,21 +215,14 @@ def generate_share_card(
     img = create_gradient(CARD_WIDTH, CARD_HEIGHT, COLORS["bg_start"], COLORS["bg_end"])
     draw = ImageDraw.Draw(img)
     
-    # Загружаем шрифты (fallback на default)
-    try:
-        font_title = ImageFont.truetype("arial.ttf", 48)
-        font_large = ImageFont.truetype("arial.ttf", 72)
-        font_medium = ImageFont.truetype("arial.ttf", 32)
-        font_small = ImageFont.truetype("arial.ttf", 24)
-    except OSError:
-        # Fallback на встроенный шрифт
-        font_title = ImageFont.load_default()
-        font_large = ImageFont.load_default()
-        font_medium = ImageFont.load_default()
-        font_small = ImageFont.load_default()
+    # Загружаем шрифты
+    font_title = load_font(48)
+    font_large = load_font(72)
+    font_medium = load_font(32)
+    font_small = load_font(24)
     
     # === ЗАГОЛОВОК ===
-    title = "Deep Diagnostic"
+    title = "MAX Diagnostic Bot"
     draw.text((50, 30), title, font=font_title, fill=COLORS["text_primary"])
     
     # === РОЛЬ И УРОВЕНЬ ===
@@ -225,7 +238,7 @@ def generate_share_card(
     )
     
     # Уровень под кругом с баллом
-    level_full = f"{emoji} {level}"
+    level_full = f"{level}"
     bbox = draw.textbbox((0, 0), level_full, font=font_medium)
     level_width = bbox[2] - bbox[0]
     draw.text(
@@ -287,7 +300,7 @@ def generate_share_card(
     # Можно добавить позже, пока оставим простой вариант
     
     # === WATERMARK ===
-    watermark = "t.me/deep_diagnostic_bot"
+    watermark = "t.me/VISUALMAXAGENCY_BOT"
     draw.text((50, CARD_HEIGHT - 50), watermark, font=font_small, fill=COLORS["text_secondary"])
     
     # Декоративные элементы
@@ -316,19 +329,13 @@ def generate_share_card_simple(
     img = create_gradient(width, height, COLORS["bg_start"], COLORS["bg_end"])
     draw = ImageDraw.Draw(img)
     
-    try:
-        font_title = ImageFont.truetype("arial.ttf", 36)
-        font_score = ImageFont.truetype("arial.ttf", 96)
-        font_level = ImageFont.truetype("arial.ttf", 28)
-        font_small = ImageFont.truetype("arial.ttf", 20)
-    except OSError:
-        font_title = ImageFont.load_default()
-        font_score = ImageFont.load_default()
-        font_level = ImageFont.load_default()
-        font_small = ImageFont.load_default()
+    font_title = load_font(36)
+    font_score = load_font(96)
+    font_level = load_font(28)
+    font_small = load_font(20)
     
     # Заголовок
-    draw.text((40, 30), "Deep Diagnostic", font=font_title, fill=COLORS["text_primary"])
+    draw.text((40, 30), "MAX Diagnostic Bot", font=font_title, fill=COLORS["text_primary"])
     
     # Роль
     draw.text((40, 80), role_name, font=font_level, fill=COLORS["accent"])
@@ -349,7 +356,7 @@ def generate_share_card_simple(
     bbox = draw.textbbox((0, 0), sub, font=font_level)
     sub_width = bbox[2] - bbox[0]
     draw.text(
-        ((width - sub_width) // 2, 260),
+        ((width - sub_width) // 2, 245),
         sub,
         font=font_level,
         fill=COLORS["text_secondary"],
@@ -357,7 +364,7 @@ def generate_share_card_simple(
     
     # Уровень
     level, emoji = get_level(total_score)
-    level_text = f"{emoji} {level}"
+    level_text = f"{level}"
     bbox = draw.textbbox((0, 0), level_text, font=font_level)
     level_width = bbox[2] - bbox[0]
     draw.text(
@@ -368,7 +375,7 @@ def generate_share_card_simple(
     )
     
     # Watermark
-    draw.text((40, height - 40), "t.me/deep_diagnostic_bot", font=font_small, fill=COLORS["text_secondary"])
+    draw.text((40, height - 40), "t.me/VISUALMAXAGENCY_BOT", font=font_small, fill=COLORS["text_secondary"])
     
     buffer = io.BytesIO()
     img.save(buffer, format="PNG", quality=95)
