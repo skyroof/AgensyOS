@@ -256,6 +256,11 @@ async def process_purchase(
             payment.status = "success"
             payment.completed_at = datetime.utcnow()
             
+            # Если это подписка — активируем
+            if payment.pack_type == "subscription_1m":
+                 from src.db.repositories.subscription_repo import activate_subscription
+                 await activate_subscription(session, user_id, days=30)
+            
             # Добавляем диагностики
             await balance_repo.add_diagnostics(
                 session, user_id, payment.diagnostics_count, payment.id, commit=False
