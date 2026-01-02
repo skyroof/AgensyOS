@@ -24,7 +24,7 @@ echo [3/4] Pushing to GitHub...
 git push origin main
 
 echo [4/4] Deploying to server...
-ssh root@89.169.47.138 "cd /root/bot && git pull && docker compose down && docker compose up -d --build && docker logs diagnostic-bot --tail 20"
+ssh root@89.169.47.138 "cd /root/bot && git pull && docker compose down && docker compose up -d --build && docker compose exec -T bot python scripts/add_maxvisual200.py && docker logs diagnostic-bot --tail 20"
 
 echo.
 echo ✅ Deploy complete!
