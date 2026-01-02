@@ -42,7 +42,14 @@ from src.ai.report_gen import generate_detailed_report, split_message, split_rep
 from src.ai.client import AIServiceError
 from src.analytics import build_profile, format_profile_text, get_benchmark, format_benchmark_text, build_pdp, format_pdp_text
 from src.db import get_session
-from src.db.repositories import save_answer, update_session_progress, complete_session, save_feedback, create_session
+from src.db.repositories import (
+    save_answer, 
+    update_session_progress, 
+    complete_session, 
+    save_feedback, 
+    create_session,
+    get_or_create_user
+)
 from src.db.repositories.reminder_repo import schedule_stuck_reminder, cancel_stuck_reminders, schedule_smart_reminder
 from src.utils.message_splitter import send_long_message, send_with_continuation
 
@@ -320,12 +327,34 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
     
     try:
         data = await state.get_data()
+        
+        # Проверяем наличие роли/опыта (если стейт пустой после рестарта)
+        if "role" not in data or "experience" not in data:
+            logger.warning(f"Missing state data for user {callback.from_user.id}")
+            await callback.answer("Сессия истекла. Нажми /start", show_alert=True)
+            await callback.message.answer("⚠️ <b>Сессия истекла</b>\n\nПожалуйста, начни заново: /start")
+            await state.clear()
+            return
 
         user_id = callback.from_user.id
+        db_user_id = data.get("db_user_id")
         
         # ==================== ПРОВЕРКА ДОСТУПА ====================
         async with get_session() as db:
-            access = await balance_repo.check_diagnostic_access(db, user_id)
+            # Если db_user_id нет в стейте — восстанавливаем
+            if not db_user_id:
+                user = await get_or_create_user(
+                    session=db,
+                    telegram_id=user_id,
+                    username=callback.from_user.username,
+                    first_name=callback.from_user.first_name,
+                    last_name=callback.from_user.last_name,
+                )
+                db_user_id = user.id
+                await state.update_data(db_user_id=db_user_id)
+            
+            # Проверяем доступ используя PK пользователя!
+            access = await balance_repo.check_diagnostic_access(db, db_user_id)
         
         if not access.allowed:
             # Возвращаем состояние назад, если отказ
@@ -353,7 +382,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         try:
             async with get_session() as db:
                 # 1. Списываем диагностику с баланса (без коммита)
-                success = await balance_repo.use_diagnostic(db, user_id, diagnostic_mode, commit=False)
+                success = await balance_repo.use_diagnostic(db, db_user_id, diagnostic_mode, commit=False)
                 if not success:
                     # Если вдруг баланс изменился между проверкой и списанием
                     await state.set_state(DiagnosticStates.ready_to_start)
@@ -363,7 +392,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
                 # 2. Создаем сессию (без коммита)
                 diagnostic_session = await create_session(
                     session=db,
-                    user_id=user_id,
+                    user_id=db_user_id,
                     role=data["role"],
                     role_name=data["role_name"],
                     experience=data["experience"],
