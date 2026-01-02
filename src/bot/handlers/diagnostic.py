@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 # Количество вопросов в зависимости от режима
 FULL_QUESTIONS = 10
-DEMO_QUESTIONS = 3
+DEMO_QUESTIONS = 5
 # REMINDER_TIMEOUT удален, так как теперь через БД (5 минут по дефолту)
 
 def get_total_questions(mode: str) -> int:

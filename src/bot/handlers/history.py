@@ -158,6 +158,8 @@ async def cmd_accessibility(message: Message):
     await message.answer(accessibility_text)
 
 
+from src.bot.handlers.payments import show_paywall
+
 @router.message(Command("profile"))
 async def cmd_profile(message: Message):
     """Показать профиль компетенций из последней диагностики."""
@@ -182,6 +184,11 @@ async def cmd_profile(message: Message):
                 return
             
             session = sessions[0]
+
+            # ПРОВЕРКА ДЛЯ ДЕМО-СЕССИЙ
+            if session.mode == "demo":
+                await show_paywall(message, demo_completed=True)
+                return
             
             # Восстанавливаем analysis_history
             analysis_history = session.analysis_history or []
@@ -260,6 +267,12 @@ async def cmd_progress(message: Message):
                     reply_markup=get_back_to_menu_keyboard(),
                 )
                 return
+
+            # Проверяем последнюю сессию
+            sessions = await get_user_sessions(db, user.id, limit=1)
+            if sessions and sessions[0].mode == "demo":
+                 await show_paywall(message, demo_completed=True)
+                 return
             
             # Получаем отчёт о прогрессе
             progress = await get_user_progress(db, user.id)
@@ -307,6 +320,11 @@ async def cmd_pdp(message: Message):
                 return
             
             session = sessions[0]
+
+            # ПРОВЕРКА ДЛЯ ДЕМО
+            if session.mode == "demo":
+                 await show_paywall(message, demo_completed=True)
+                 return
             
             # Восстанавливаем analysis_history
             analysis_history = session.analysis_history or []
@@ -386,6 +404,11 @@ async def process_pdf_download(callback: CallbackQuery):
                 await callback.message.answer("❌ Диагностика не завершена.")
                 return
             
+            # ПРОВЕРКА ДЛЯ ДЕМО
+            if diagnostic_session.mode == "demo":
+                 await show_paywall(callback.message, demo_completed=True)
+                 return
+
             # Получаем данные для PDF
             scores = {
                 "total": diagnostic_session.total_score or 0,
