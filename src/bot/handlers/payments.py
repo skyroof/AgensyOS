@@ -350,6 +350,17 @@ async def handle_promo_input(message: Message, state: FSMContext):
     if code == "MAXVISUAL200":
         try:
             async with get_session() as session:
+                # 0. Гарантируем, что пользователь существует
+                from src.db.repositories.user_repo import get_or_create_user
+                # Используем данные из сообщения для создания/обновления пользователя
+                await get_or_create_user(
+                    session, 
+                    telegram_id=user_id,
+                    username=message.from_user.username,
+                    first_name=message.from_user.first_name,
+                    last_name=message.from_user.last_name
+                )
+                
                 # 1. Даем 999 диагностик
                 await balance_repo.add_diagnostics(
                     session, user_id, 999, payment_id=None, commit=False
@@ -375,8 +386,11 @@ async def handle_promo_input(message: Message, state: FSMContext):
             )
             await state.clear()
         except Exception as e:
+            import html
             logger.error(f"GOD MODE ERROR: {e}", exc_info=True)
-            await message.answer(f"⚠️ Ошибка активации: {str(e)}")
+            # Экранируем текст ошибки, чтобы не сломать HTML-парсинг Telegram
+            safe_error = html.escape(str(e))
+            await message.answer(f"⚠️ Ошибка активации: {safe_error}")
         return
     # ====================================================================
 
