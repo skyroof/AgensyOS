@@ -284,9 +284,17 @@ def _generate_integration_week(week_num: int, skills: list[str]) -> WeekPlan:
         goal="Применить все изученное в комплексе"
     )
     
-    # Чередуем навыки
-    s1, s2, s3 = skills
-    n1, n2, n3 = [METRIC_NAMES_RU.get(s, s) for s in skills]
+    # Ensure we have at least 3 skills, filling with duplicates if needed
+    if not skills:
+        skills = ["depth", "systems_thinking", "creativity"]
+    
+    # Handle cases with fewer than 3 skills by cycling
+    extended_skills = skills * 3  # Ensure we have enough items
+    s1, s2, s3 = extended_skills[0], extended_skills[1], extended_skills[2]
+    
+    n1 = METRIC_NAMES_RU.get(s1, s1)
+    n2 = METRIC_NAMES_RU.get(s2, s2)
+    n3 = METRIC_NAMES_RU.get(s3, s3)
     
     week.days[1] = [_create_task(s1, n1, "practice")]
     week.days[2] = [_create_task(s2, n2, "practice")]
