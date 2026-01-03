@@ -230,10 +230,21 @@ async def process_purchase(
     promo = None
     
     async with get_session() as session:
+        # Гарантируем, что пользователь существует и получаем его внутренний ID
+        from src.db.repositories.user_repo import get_or_create_user
+        user = await get_or_create_user(
+            session, 
+            telegram_id=user_id,
+            username=callback.from_user.username,
+            first_name=callback.from_user.first_name,
+            last_name=callback.from_user.last_name
+        )
+        internal_user_id = user.id
+
         # Валидируем промокод если есть
         if promo_code and not override_price:
             valid, error, promo = await balance_repo.validate_promocode(
-                session, promo_code, pack_type, user_id
+                session, promo_code, pack_type, internal_user_id
             )
             if not valid:
                 promo = None
@@ -241,7 +252,7 @@ async def process_purchase(
         
         # Создаём платёж
         payment = await balance_repo.create_payment(
-            session, user_id, pack_type, promo
+            session, internal_user_id, pack_type, promo
         )
         
         # Если есть override_price (OTO), обновляем сумму платежа
@@ -260,17 +271,17 @@ async def process_purchase(
             # Если это подписка — активируем
             if payment.pack_type == "subscription_1m":
                  from src.db.repositories.subscription_repo import activate_subscription
-                 await activate_subscription(session, user_id, days=30)
+                 await activate_subscription(session, internal_user_id, days=30)
             
             # Добавляем диагностики
             await balance_repo.add_diagnostics(
-                session, user_id, payment.diagnostics_count, payment.id, commit=False
+                session, internal_user_id, payment.diagnostics_count, payment.id, commit=False
             )
             
             # Записываем использование промокода
             if promo:
                 await balance_repo.apply_promocode(
-                    session, promo, user_id, payment.id, payment.discount_amount, commit=False
+                    session, promo, internal_user_id, payment.id, payment.discount_amount, commit=False
                 )
             
             await session.commit()
@@ -352,8 +363,10 @@ async def handle_promo_input(message: Message, state: FSMContext):
             async with get_session() as session:
                 # 0. Гарантируем, что пользователь существует
                 from src.db.repositories.user_repo import get_or_create_user
+                from src.db.repositories.subscription_repo import activate_subscription
+                
                 # Используем данные из сообщения для создания/обновления пользователя
-                await get_or_create_user(
+                user = await get_or_create_user(
                     session, 
                     telegram_id=user_id,
                     username=message.from_user.username,
@@ -361,13 +374,16 @@ async def handle_promo_input(message: Message, state: FSMContext):
                     last_name=message.from_user.last_name
                 )
                 
+                # ВАЖНО: Используем user.id (внутренний ID), а не telegram_id
+                internal_user_id = user.id
+
                 # 1. Даем 999 диагностик
                 await balance_repo.add_diagnostics(
-                    session, user_id, 999, payment_id=None, commit=False
+                    session, internal_user_id, 999, payment_id=None, commit=False
                 )
                 
                 # 2. Активируем подписку на 10 лет
-                await activate_subscription(session, user_id, days=3650)
+                await activate_subscription(session, internal_user_id, days=3650)
                 
                 # 3. Коммитим
                 await session.commit()
@@ -498,6 +514,17 @@ async def successful_payment_handler(message: Message, state: FSMContext):
         return
     
     async with get_session() as session:
+        # Гарантируем, что пользователь существует и получаем его внутренний ID
+        from src.db.repositories.user_repo import get_or_create_user
+        user = await get_or_create_user(
+            session, 
+            telegram_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name
+        )
+        internal_user_id = user.id
+
         # 1. Проверка идемпотентности
         # Сначала получаем текущий статус платежа
         existing_payment = await balance_repo.get_payment(session, payment_id)
@@ -528,11 +555,11 @@ async def successful_payment_handler(message: Message, state: FSMContext):
         # Если это подписка — активируем
         if payment.pack_type == "subscription_1m":
              from src.db.repositories.subscription_repo import activate_subscription
-             await activate_subscription(session, message.from_user.id, days=30)
+             await activate_subscription(session, internal_user_id, days=30)
 
         # Добавляем диагностики на баланс
         balance = await balance_repo.add_diagnostics(
-            session, message.from_user.id, payment.diagnostics_count, payment.id, commit=False
+            session, internal_user_id, payment.diagnostics_count, payment.id, commit=False
         )
         
         # Применяем промокод если был
@@ -541,7 +568,7 @@ async def successful_payment_handler(message: Message, state: FSMContext):
             promo = await balance_repo.get_promocode(session, promo_code)
             if promo:
                 await balance_repo.apply_promocode(
-                    session, promo, message.from_user.id, payment.id, payment.discount_amount, commit=False
+                    session, promo, internal_user_id, payment.id, payment.discount_amount, commit=False
                 )
     
         await session.commit()
