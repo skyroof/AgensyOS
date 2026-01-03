@@ -172,60 +172,64 @@ BADGES = {
 @router.message(F.text == "📚 Мой PDP")
 async def cmd_pdp(message: Message, state: FSMContext):
     """Показать PDP или предложить создать."""
-    await state.clear()
-    
-    async with get_session() as db:
-        user = await get_user_by_telegram_id(db, message.from_user.id)
+    try:
+        await state.clear()
         
-        if not user:
-            await message.answer(
-                "📋 <b>План развития</b>\n\n"
-                "Сначала пройди диагностику, чтобы я мог создать персональный план.\n\n"
-                "<i>Начни с /start</i>",
-            )
-            return
-        
-        # Ищем активный план
-        plan = await get_active_pdp_plan(db, user.id)
-        
-        if plan:
-            # Показываем существующий план
-            stats = await get_pdp_stats(db, plan.id)
+        async with get_session() as db:
+            user = await get_user_by_telegram_id(db, message.from_user.id)
             
-            text = f"""🎯 <b>ТВОЙ ПЛАН РАЗВИТИЯ</b>
-
-<b>Прогресс:</b> {stats['completed_tasks']}/{stats['total_tasks']} задач ({stats['completion_rate']}%)
-<b>Неделя:</b> {stats['current_week']}/4
-<b>Серия:</b> 🔥 {stats['current_streak']} дней
-
-<b>Очки:</b> {stats['total_points']} ⭐
-<b>Бейджи:</b> {stats['badges_count']} 🏅
-
-<i>Выбери действие:</i>"""
-            
-            await message.answer(
-                text,
-                reply_markup=get_pdp_main_keyboard(plan.id),
-            )
-        else:
-            # Предлагаем создать
-            sessions = await get_completed_sessions(db, user.id, limit=1)
-            
-            if sessions:
+            if not user:
                 await message.answer(
                     "📋 <b>План развития</b>\n\n"
-                    "У тебя есть завершённая диагностика!\n"
-                    "Создадим персональный 30-дневный план?\n\n"
-                    "<i>Это займёт 2 минуты.</i>",
-                    reply_markup=get_no_plan_keyboard(),
+                    "Сначала пройди диагностику, чтобы я мог создать персональный план.\n\n"
+                    "<i>Начни с /start</i>",
+                )
+                return
+            
+            # Ищем активный план
+            plan = await get_active_pdp_plan(db, user.id)
+            
+            if plan:
+                # Показываем существующий план
+                stats = await get_pdp_stats(db, plan.id)
+                
+                text = f"""🎯 <b>ТВОЙ ПЛАН РАЗВИТИЯ</b>
+    
+    <b>Прогресс:</b> {stats['completed_tasks']}/{stats['total_tasks']} задач ({stats['completion_rate']}%)
+    <b>Неделя:</b> {stats['current_week']}/4
+    <b>Серия:</b> 🔥 {stats['current_streak']} дней
+    
+    <b>Очки:</b> {stats['total_points']} ⭐
+    <b>Бейджи:</b> {stats['badges_count']} 🏅
+    
+    <i>Выбери действие:</i>"""
+                
+                await message.answer(
+                    text,
+                    reply_markup=get_pdp_main_keyboard(plan.id),
                 )
             else:
-                await message.answer(
-                    "📋 <b>План развития</b>\n\n"
-                    "Сначала пройди диагностику, чтобы я понял твои зоны роста.\n\n"
-                    "<i>Начни с /start</i>",
-                    reply_markup=get_no_plan_keyboard(),
-                )
+                # Предлагаем создать
+                sessions = await get_completed_sessions(db, user.id, limit=1)
+                
+                if sessions:
+                    await message.answer(
+                        "📋 <b>План развития</b>\n\n"
+                        "У тебя есть завершённая диагностика!\n"
+                        "Создадим персональный 30-дневный план?\n\n"
+                        "<i>Это займёт 2 минуты.</i>",
+                        reply_markup=get_no_plan_keyboard(),
+                    )
+                else:
+                    await message.answer(
+                        "📋 <b>План развития</b>\n\n"
+                        "Сначала пройди диагностику, чтобы я понял твои зоны роста.\n\n"
+                        "<i>Начни с /start</i>",
+                        reply_markup=get_no_plan_keyboard(),
+                    )
+    except Exception as e:
+        logger.error(f"Failed to open PDP: {e}")
+        await message.answer("❌ Не удалось загрузить PDP. Попробуй позже.")
 
 
 # ==================== CREATE PLAN ====================

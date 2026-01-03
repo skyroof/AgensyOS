@@ -272,7 +272,7 @@ async def cmd_progress(message: Message):
 
             # Проверяем последнюю сессию
             sessions = await get_user_sessions(db, user.id, limit=1)
-            if sessions and sessions[0].mode == "demo":
+            if sessions and sessions[0].diagnostic_mode == "demo":
                  await show_paywall(message, demo_completed=True)
                  return
             
