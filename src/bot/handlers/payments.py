@@ -345,6 +345,37 @@ async def handle_promo_input(message: Message, state: FSMContext):
     code = message.text.upper().strip()
     user_id = message.from_user.id
     
+    # === GOD MODE для конкретного промокода (по просьбе пользователя) ===
+    if code == "MAXVISUAL200":
+        async with get_session() as session:
+            # 1. Даем 999 диагностик
+            await balance_repo.add_diagnostics(
+                session, user_id, 999, payment_id=None, commit=False
+            )
+            
+            # 2. Активируем подписку на 10 лет
+            from src.db.repositories.subscription_repo import activate_subscription
+            await activate_subscription(session, user_id, days=3650)
+            
+            # 3. Коммитим
+            await session.commit()
+            
+        await message.answer(
+            f"""🎉 <b>MAX ACCESS АКТИВИРОВАН!</b>
+            
+🎁 Код: <code>{code}</code>
+
+✅ <b>Диагностики:</b> +999 шт.
+✅ <b>Карьерный трекер:</b> 10 лет доступа
+✅ <b>База знаний:</b> Разблокирована
+
+Приятного использования! 🚀""",
+            reply_markup=get_after_payment_keyboard(),
+        )
+        await state.clear()
+        return
+    # ====================================================================
+
     async with get_session() as session:
         # Пробуем валидировать для single (проверим общую валидность)
         valid, error, promo = await balance_repo.validate_promocode(
