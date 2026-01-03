@@ -40,7 +40,7 @@ from src.ai.answer_analyzer import (
     METRIC_NAMES_RU,
     METRIC_CATEGORIES,
 )
-from src.ai.report_gen import generate_detailed_report, split_message, split_report_into_blocks, sanitize_html
+from src.ai.report_gen import generate_detailed_report, split_message, split_report_into_blocks, sanitize_html, generate_fallback_report
 from src.ai.client import AIServiceError
 from src.analytics import build_profile, format_profile_text, get_benchmark, format_benchmark_text, build_pdp, format_pdp_text
 from src.db import get_session
@@ -1398,7 +1398,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         )
         
         # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
-            asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
+        asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
 
 
 # === ХРАНИЛИЩЕ ТАЙМЕРОВ FEEDBACK ===
@@ -1655,36 +1655,31 @@ async def generate_basic_report(
 ) -> str:
     """
     Fallback отчёт если AI недоступен.
+    Использует структурированный шаблон из report_gen.
     """
     # Собираем ключевые инсайты
     all_insights = []
     all_gaps = []
-    hypotheses = []
     
     for analysis in analysis_history:
         all_insights.extend(analysis.get("key_insights", []))
         all_gaps.extend(analysis.get("gaps", []))
-        if analysis.get("hypothesis"):
-            hypotheses.append(analysis["hypothesis"])
     
     # Формируем топ инсайтов (убираем дубли)
-    unique_insights = list(dict.fromkeys(all_insights))[:5]
-    unique_gaps = list(dict.fromkeys(all_gaps))[:3]
+    unique_insights = list(dict.fromkeys(all_insights))
+    unique_gaps = list(dict.fromkeys(all_gaps))
     
-    insights_text = "\n".join(f"• {i}" for i in unique_insights) if unique_insights else "• Недостаточно данных"
-    gaps_text = "\n".join(f"• {g}" for g in unique_gaps) if unique_gaps else "• Не выявлено"
-    final_hypothesis = hypotheses[-1] if hypotheses else "Требуется дополнительный анализ"
+    # Рассчитываем баллы
+    raw_scores = calculate_category_scores(analysis_history)
+    scores = calibrate_scores(raw_scores, data.get("experience", "middle"))
     
-    return f"""<b>💡 Ключевые наблюдения:</b>
-{insights_text}
-
-<b>⚠️ Зоны для развития:</b>
-{gaps_text}
-
-<b>🔮 Общее впечатление:</b>
-{final_hypothesis}
-
-<i>Детальный AI-анализ временно недоступен.</i>"""
+    return generate_fallback_report(
+        role_name=data.get("role_name", "Специалист"),
+        experience=data.get("experience_name", "Middle"),
+        scores=scores,
+        insights=unique_insights,
+        gaps=unique_gaps
+    )
 
 
 # ==================== GENERATING REPORT PROTECTION ====================
