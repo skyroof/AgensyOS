@@ -88,6 +88,10 @@ FONT_PATHS = {
         # Fallback: DejaVu (Linux) / Arial (Windows)
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/Arial.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        "C:/Windows/Fonts/verdana.ttf",
+        "C:/Windows/Fonts/tahoma.ttf",
     ],
     "medium": [
         "/app/assets/fonts/Montserrat-Medium.ttf",
@@ -2110,6 +2114,11 @@ def generate_pdf_report(
     
     # Очищаем HTML теги и конвертируем
     clean_report = report_text
+    
+    # Защита от слишком длинного текста в PDF
+    if len(clean_report) > 50000:
+        clean_report = clean_report[:50000] + "\n\n... [Текст сокращен для PDF]"
+        
     clean_report = clean_report.replace('━', '—')
     clean_report = clean_report.replace('•', '•')
     clean_report = clean_report.replace('▸', '•')

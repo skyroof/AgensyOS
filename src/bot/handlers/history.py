@@ -545,8 +545,12 @@ async def process_pdf_download(callback: CallbackQuery):
                 await status_msg.delete()
                 
             except Exception as e:
-                logger.error(f"PDF generation failed: {e}")
-                await status_msg.edit_text("❌ Не удалось сгенерировать PDF. Попробуй позже.")
+                logger.error(f"PDF generation failed: {e}", exc_info=True)
+                error_text = str(e)
+                if "font" in error_text.lower():
+                    await status_msg.edit_text("❌ Ошибка шрифтов на сервере. PDF временно недоступен.")
+                else:
+                    await status_msg.edit_text(f"❌ Не удалось сгенерировать PDF. Ошибка: {error_text[:100]}")
                 
     except Exception as e:
         logger.error(f"Failed to generate PDF: {e}")

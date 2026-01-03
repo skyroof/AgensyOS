@@ -1156,6 +1156,8 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         # Теперь генерируем отчёт
         report_msg = await callback.message.answer(
             "📊 <b>Генерирую детальный AI-отчёт...</b>\n\n"
+            "⚠️ <b>Внимание:</b> Это может занять до 10 минут из-за большого объема данных.\n"
+            "Пожалуйста, не закрывайте чат.\n\n"
             "<code>▓░░░░░░░░░</code> 10%\n\n"
             "<i>Анализирую все 10 ответов...</i>"
         )
@@ -1173,16 +1175,46 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 ("▓▓▓▓▓▓▓▓░░", "80%", "Сравниваю с рынком..."),
                 ("▓▓▓▓▓▓▓▓▓░", "90%", "Финализирую отчёт..."),
             ]
+            
+            long_wait_messages = [
+                "🤔 Анализирую полный контекст диалога...",
+                "🧠 Формирую глубокие выводы...",
+                "📚 Обрабатываю большой объем данных...",
+                "✍️ Оформляю структуру отчёта...",
+                "🔍 Проверяю каждую деталь...",
+                "⏳ Осталось совсем немного..."
+            ]
+            
             try:
+                # Основные этапы (первые ~90 секунд)
                 for bar, pct, status in progress_states:
-                    await asyncio.sleep(2)  # Быстрее обновляем
+                    await asyncio.sleep(10)  # Увеличили интервал
                     await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
                     try:
                         await report_msg.edit_text(
-                            f"📊 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
+                            f"📊 <b>{status}</b>\n\n"
+                            f"⚠️ <i>Генерация может занять до 10 минут</i>\n\n"
+                            f"<code>{bar}</code> {pct}"
                         )
                     except Exception:
                         pass
+                
+                # Если всё ещё ждём (после 90 сек)
+                i = 0
+                while True:
+                    await asyncio.sleep(20)  # Редкие обновления для долгих ожиданий
+                    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
+                    msg = long_wait_messages[i % len(long_wait_messages)]
+                    try:
+                        await report_msg.edit_text(
+                            f"📊 <b>{msg}</b>\n\n"
+                            f"⚠️ <i>Пожалуйста, подождите (до 10 мин)...</i>\n\n"
+                            f"<code>▓▓▓▓▓▓▓▓▓░</code> 95%"
+                        )
+                    except Exception:
+                        pass
+                    i += 1
+                    
             except asyncio.CancelledError:
                 pass
         
@@ -1191,13 +1223,20 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         # Генерируем детальный отчёт через AI
         report = ""
         try:
-            report = await generate_detailed_report(
-                role=data["role"],
-                role_name=data["role_name"],
-                experience=data["experience_name"],
-                conversation_history=conversation_history,
-                analysis_history=analysis_history,
+            # Ограничиваем время генерации 10 минутами (600 секунд)
+            report = await asyncio.wait_for(
+                generate_detailed_report(
+                    role=data["role"],
+                    role_name=data["role_name"],
+                    experience=data["experience_name"],
+                    conversation_history=conversation_history,
+                    analysis_history=analysis_history,
+                ),
+                timeout=600.0
             )
+        except asyncio.TimeoutError:
+            logger.error("Report generation timed out (600s)")
+            report = await generate_basic_report(data, conversation_history, analysis_history)
         except Exception as e:
             logger.error(f"Report generation failed: {e}")
             # Fallback на базовый отчёт
@@ -1337,18 +1376,28 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
             
             # === ONE-TIME OFFER (OTO) ===
-            # Предлагаем скидку 30% на Pack 3 сразу после результата
-            await asyncio.sleep(2)
-            await callback.message.answer(
-                "🔥 <b>Специальное предложение!</b>\n\n"
-                "Только сейчас: пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n\n"
-                "Обычная цена: <s>990₽</s>\n"
-                "<b>Твоя цена: 690₽</b>\n\n"
-                "<i>Предложение действует 15 минут.</i>",
-                reply_markup=get_oto_keyboard(),
-            )
-            
-            # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
+        # Предлагаем скидку 30% на Pack 3 сразу после результата
+        await asyncio.sleep(2)
+        await callback.message.answer(
+            "🔥 <b>Специальное предложение!</b>\n\n"
+            "Только сейчас: пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n\n"
+            "Обычная цена: <s>990₽</s>\n"
+            "<b>Твоя цена: 690₽</b>\n\n"
+            "<i>Предложение действует 15 минут.</i>",
+            reply_markup=get_oto_keyboard(),
+        )
+        
+        # Добавляем подсказку про PDP, если он ещё не создан
+        await asyncio.sleep(1)
+        await callback.message.answer(
+            "🚀 <b>Что делать дальше?</b>\n\n"
+            "1. Изучи детальный отчёт (кнопка выше)\n"
+            "2. Создай персональный план развития (PDP)\n"
+            "3. Отслеживай прогресс в /history\n\n"
+            "Нажми /pdp чтобы получить задания на неделю!"
+        )
+        
+        # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
             asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
 
 
