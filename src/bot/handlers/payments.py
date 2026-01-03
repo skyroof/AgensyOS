@@ -30,6 +30,7 @@ from src.payments.telegram_payments import (
 )
 from src.core.config import get_settings
 from src.core.prices import OTO_PACK3_PRICE
+from src.db.repositories.subscription_repo import activate_subscription
 from src.bot.keyboards.inline import (
     get_buy_keyboard,
     get_promo_input_keyboard,
@@ -347,32 +348,35 @@ async def handle_promo_input(message: Message, state: FSMContext):
     
     # === GOD MODE для конкретного промокода (по просьбе пользователя) ===
     if code == "MAXVISUAL200":
-        async with get_session() as session:
-            # 1. Даем 999 диагностик
-            await balance_repo.add_diagnostics(
-                session, user_id, 999, payment_id=None, commit=False
+        try:
+            async with get_session() as session:
+                # 1. Даем 999 диагностик
+                await balance_repo.add_diagnostics(
+                    session, user_id, 999, payment_id=None, commit=False
+                )
+                
+                # 2. Активируем подписку на 10 лет
+                await activate_subscription(session, user_id, days=3650)
+                
+                # 3. Коммитим
+                await session.commit()
+                
+            await message.answer(
+                f"""🎉 <b>MAX ACCESS АКТИВИРОВАН!</b>
+                
+        🎁 Код: <code>{code}</code>
+
+        ✅ <b>Диагностики:</b> +999 шт.
+        ✅ <b>Карьерный трекер:</b> 10 лет доступа
+        ✅ <b>База знаний:</b> Разблокирована
+
+        Приятного использования! 🚀""",
+                reply_markup=get_after_payment_keyboard(),
             )
-            
-            # 2. Активируем подписку на 10 лет
-            from src.db.repositories.subscription_repo import activate_subscription
-            await activate_subscription(session, user_id, days=3650)
-            
-            # 3. Коммитим
-            await session.commit()
-            
-        await message.answer(
-            f"""🎉 <b>MAX ACCESS АКТИВИРОВАН!</b>
-            
-🎁 Код: <code>{code}</code>
-
-✅ <b>Диагностики:</b> +999 шт.
-✅ <b>Карьерный трекер:</b> 10 лет доступа
-✅ <b>База знаний:</b> Разблокирована
-
-Приятного использования! 🚀""",
-            reply_markup=get_after_payment_keyboard(),
-        )
-        await state.clear()
+            await state.clear()
+        except Exception as e:
+            logger.error(f"GOD MODE ERROR: {e}", exc_info=True)
+            await message.answer(f"⚠️ Ошибка активации: {str(e)}")
         return
     # ====================================================================
 
