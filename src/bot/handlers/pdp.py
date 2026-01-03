@@ -317,7 +317,9 @@ async def choose_style_and_create(callback: CallbackQuery, state: FSMContext, bo
         
         # Определяем топ-3 зоны роста
         analysis = session.analysis_history
-        raw_averages = analysis.get("raw_averages", {})
+        # Рассчитываем scores для получения raw_averages
+        scores = calculate_category_scores(analysis)
+        raw_averages = scores.get("raw_averages", {})
         
         # Сортируем метрики по gap (10 - score)
         sorted_metrics = sorted(
