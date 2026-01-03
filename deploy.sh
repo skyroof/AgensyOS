@@ -26,6 +26,11 @@ docker rm -f diagnostic-bot diagnostic-redis diagnostic-db || true
 docker-compose build --no-cache
 docker-compose up -d
 
+# 3.1 Run migrations
+echo "🔄 Running migrations..."
+docker-compose exec -T bot python scripts/migrate_mode_column.py
+docker-compose exec -T bot python scripts/force_migration.py
+
 # 4. Cleanup unused images
 echo "🧹 Cleaning up..."
 docker image prune -f
