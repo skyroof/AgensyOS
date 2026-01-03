@@ -56,6 +56,26 @@ def get_navigation_reply_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
 
 
+def get_main_menu_reply_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Главное меню бота (Reply Keyboard).
+    Показывается после старта и завершения диагностики.
+    """
+    builder = ReplyKeyboardBuilder()
+    builder.row(
+        KeyboardButton(text="🚀 Новая диагностика"),
+    )
+    builder.row(
+        KeyboardButton(text="👤 Профиль"),
+        KeyboardButton(text="📊 История"),
+    )
+    builder.row(
+        KeyboardButton(text="📚 Мой PDP"),
+        KeyboardButton(text="💳 Баланс"),
+    )
+    return builder.as_markup(resize_keyboard=True)
+
+
 def get_start_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply-клавиатура для старта диагностики."""
     builder = ReplyKeyboardBuilder()

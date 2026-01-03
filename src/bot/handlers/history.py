@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.message(Command("history"))
+@router.message(F.text == "📊 История")
 async def cmd_history(message: Message, bot: Bot):
     """Показать историю диагностик пользователя с динамикой развития."""
     try:

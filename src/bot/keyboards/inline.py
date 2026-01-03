@@ -75,6 +75,9 @@ def get_start_diagnostic_keyboard() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="🚀 Начать диагностику", callback_data="start_diagnostic"),
     )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="restart"),
+    )
     return builder.as_markup()
 
 
@@ -312,6 +315,22 @@ def get_timeout_keyboard(retry_action: str = "retry_analysis") -> InlineKeyboard
     return builder.as_markup()
 
 
+def get_post_diagnostic_keyboard() -> InlineKeyboardMarkup:
+    """
+    Клавиатура после прохождения диагностики (Next Steps).
+    """
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🚀 Создать PDP", callback_data="pdp_start"),
+        InlineKeyboardButton(text="📊 История", callback_data="show_history"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🔄 Новая диагностика", callback_data="restart"),
+        InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu"),
+    )
+    return builder.as_markup()
+
+
 def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
     """Универсальная клавиатура для возврата в меню."""
     builder = InlineKeyboardBuilder()
@@ -320,6 +339,7 @@ def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📊 История", callback_data="show_history"),
     )
     builder.row(
+        InlineKeyboardButton(text="📚 Мой PDP", callback_data="pdp_menu"),
         InlineKeyboardButton(text="🏠 В главное меню", callback_data="main_menu"),
     )
     return builder.as_markup()

@@ -10,6 +10,11 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 
 from src.bot.states import DiagnosticStates
+from src.bot.keyboards.reply import (
+    get_role_reply_keyboard,
+    get_experience_reply_keyboard,
+    get_main_menu_reply_keyboard,
+)
 from src.bot.keyboards.inline import (
     get_role_keyboard,
     get_experience_keyboard,
@@ -191,12 +196,21 @@ async def cmd_start(message: Message, state: FSMContext):
     if has_completed:
         # Для опытных пользователей сразу даем выбор роли (пропускаем тизер)
         keyboard = get_start_with_history_keyboard(True, best_score)
-
+        
+        # Отправляем приветствие с Reply-меню
         await message.answer(
-            get_welcome_text(user_first_name, balance_info),
-            reply_markup=keyboard,
+            f"👋 <b>С возвращением, {user_first_name}!</b>\n\n"
+            f"Твой лучший результат: <b>{best_score or 0}/100</b>\n"
+            f"{balance_info}\n"
+            "Выбери действие в меню 👇",
+            reply_markup=get_main_menu_reply_keyboard()
         )
-        await state.set_state(DiagnosticStates.choosing_role)
+        # И дублируем inline для быстрого старта (опционально, или просто inline)
+        await message.answer(
+            "Или начни новую диагностику:",
+            reply_markup=keyboard
+        )
+
     else:
         # Для новых пользователей — Teaser + Micro-commitment
         # 1. Отправляем тизер результата
@@ -208,6 +222,20 @@ async def cmd_start(message: Message, state: FSMContext):
             reply_markup=get_goal_keyboard(),
         )
         await state.set_state(DiagnosticStates.choosing_goal)
+
+
+@router.message(F.text == "🚀 Новая диагностика")
+async def btn_new_diagnostic(message: Message, state: FSMContext):
+    """Кнопка 'Новая диагностика' — аналог /start."""
+    await cmd_start(message, state)
+
+
+@router.message(F.text == "👤 Профиль")
+async def btn_profile(message: Message, state: FSMContext):
+    """Кнопка 'Профиль' — показывает статистику."""
+    # Используем логику cmd_start, но принудительно показываем профиль
+    # Или можно сделать отдельную функцию get_profile_text
+    await cmd_start(message, state)
 
 
 @router.callback_query(F.data.startswith("goal:"), DiagnosticStates.choosing_goal)
@@ -520,11 +548,25 @@ async def process_show_onboarding(callback: CallbackQuery, state: FSMContext):
     experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
     question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
 
+    # Определяем режим диагностики (по умолчанию full для старых юзеров)
+    access_mode = data.get("access_mode", "full")
+    if access_mode == "demo":
+        mode_info = "\n🆓 <b>Режим: ДЕМО (бесплатно)</b>"
+        questions_count = "3 вопроса"
+        time_estimate = "~5 минут"
+    else:
+        mode_info = "\n💎 <b>Режим: ПОЛНАЯ диагностика</b>"
+        questions_count = "10 вопросов"
+        time_estimate = "~15 минут"
+
     onboarding = ONBOARDING_STEP1.format(
         role_name=data.get("role_name", "Специалист"),
         exp_value=data.get("experience_name", ""),
+        mode_info=mode_info,
         experience_tip=experience_tip,
         question_topics=question_topics,
+        questions_count=questions_count,
+        time_estimate=time_estimate,
     )
 
     await callback.message.edit_text(

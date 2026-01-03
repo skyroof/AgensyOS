@@ -28,7 +28,9 @@ from src.bot.keyboards.inline import (
     get_after_share_keyboard,
     get_report_sections_keyboard,
     get_back_to_report_menu_keyboard,
+    get_post_diagnostic_keyboard,
 )
+from src.bot.keyboards.reply import get_main_menu_reply_keyboard
 from src.core.prices import SHARE_PROMO_CODE
 from src.db.repositories import balance_repo
 from src.ai.question_gen import generate_question
@@ -1394,7 +1396,14 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             "1. Изучи детальный отчёт (кнопка выше)\n"
             "2. Создай персональный план развития (PDP)\n"
             "3. Отслеживай прогресс в /history\n\n"
-            "Нажми /pdp чтобы получить задания на неделю!"
+            "👇 <i>Используй меню внизу для навигации</i>",
+            reply_markup=get_post_diagnostic_keyboard()
+        )
+        
+        # Обновляем нижнее меню
+        await callback.message.answer(
+            "Меню обновлено:", 
+            reply_markup=get_main_menu_reply_keyboard()
         )
         
         # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===

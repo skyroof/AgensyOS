@@ -72,17 +72,6 @@ async def process_user_digest(session: AsyncSession, bot: Bot, user_id: int) -> 
     )
     pdp = (await session.execute(pdp_stmt)).scalar_one_or_none()
 
-    skill = "General Growth"
-    role = "Specialist"
-    experience = "Unknown"
-
-    if pdp and pdp.focus_skills:
-        # Pick a random skill from focus_skills
-        # focus_skills is a dict {"skills": ["A", "B"]}
-        skills = pdp.focus_skills.get("skills", [])
-        if skills:
-            skill = random.choice(skills)
-
     # Get role/exp from diagnostic session
     diag_stmt = (
         select(DiagnosticSession)
@@ -93,9 +82,34 @@ async def process_user_digest(session: AsyncSession, bot: Bot, user_id: int) -> 
     )
     diag = (await session.execute(diag_stmt)).scalar_one_or_none()
 
+    skill = "General Growth"
+    role = "Specialist"
+    experience = "Unknown"
+
     if diag:
         role = diag.role_name
         experience = diag.experience_name
+
+    if pdp and pdp.focus_skills:
+        # Pick a random skill from focus_skills
+        # focus_skills is a dict {"skills": ["A", "B"]}
+        skills = pdp.focus_skills.get("skills", [])
+        if skills:
+            skill = random.choice(skills)
+    elif diag:
+        # Fallback: pick weakest category from diagnostic
+        scores = {
+            "Hard Skills": diag.hard_skills_score or 0,
+            "Soft Skills": diag.soft_skills_score or 0,
+            "Thinking": diag.thinking_score or 0,
+            "Mindset": diag.mindset_score or 0,
+        }
+        # Sort by score ascending, ignore 0 if possible (unless all 0)
+        valid_scores = {k: v for k, v in scores.items() if v > 0}
+        if not valid_scores:
+            valid_scores = scores
+            
+        skill = min(valid_scores, key=valid_scores.get)
 
     # Generate content
     prompt = DIGEST_USER_PROMPT.format(
@@ -124,10 +138,11 @@ async def process_user_digest(session: AsyncSession, bot: Bot, user_id: int) -> 
 
     # Send message
     message_text = (
-        f"📚 <b>Еженедельный дайджест</b>\n\n"
-        f"Для навыка: <b>{skill}</b>\n\n"
+        f"📚 <b>Еженедельный дайджест</b>\n"
+        f"<i>Для: {role} ({experience})</i>\n\n"
+        f"🎯 <b>Фокус:</b> {skill}\n\n"
         f"📌 <b>{content_data.get('title')}</b>\n"
-        f"<i>{content_data.get('reason')}</i>\n\n"
+        f"{content_data.get('reason')}\n\n"
     )
 
     url = content_data.get("url")

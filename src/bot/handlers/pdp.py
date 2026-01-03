@@ -169,6 +169,7 @@ BADGES = {
 # ==================== COMMANDS ====================
 
 @router.message(Command("pdp"))
+@router.message(F.text == "📚 Мой PDP")
 async def cmd_pdp(message: Message, state: FSMContext):
     """Показать PDP или предложить создать."""
     await state.clear()
