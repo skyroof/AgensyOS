@@ -45,6 +45,7 @@ from src.analytics.pdp_generator import (
 )
 from src.utils.message_splitter import send_with_continuation
 from src.bot.handlers.payments import show_paywall
+from src.ai.answer_analyzer import calculate_category_scores
 
 
 logger = logging.getLogger(__name__)
