@@ -188,7 +188,7 @@ async def cmd_profile(message: Message):
             session = sessions[0]
 
             # ПРОВЕРКА ДЛЯ ДЕМО-СЕССИЙ
-            if session.mode == "demo":
+            if session.diagnostic_mode == "demo":
                 await show_paywall(message, demo_completed=True)
                 return
             
@@ -324,7 +324,7 @@ async def cmd_pdp(message: Message):
             session = sessions[0]
 
             # ПРОВЕРКА ДЛЯ ДЕМО
-            if session.mode == "demo":
+            if session.diagnostic_mode == "demo":
                  await show_paywall(message, demo_completed=True)
                  return
             
@@ -407,7 +407,7 @@ async def process_pdf_download(callback: CallbackQuery):
                 return
             
             # ПРОВЕРКА ДЛЯ ДЕМО
-            if diagnostic_session.mode == "demo":
+            if diagnostic_session.diagnostic_mode == "demo":
                  await show_paywall(callback.message, demo_completed=True)
                  return
 

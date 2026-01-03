@@ -44,6 +44,7 @@ from src.analytics.pdp_generator import (
     TASK_TYPES,
 )
 from src.utils.message_splitter import send_with_continuation
+from src.bot.handlers.payments import show_paywall
 
 
 logger = logging.getLogger(__name__)
@@ -213,6 +214,11 @@ async def cmd_pdp(message: Message, state: FSMContext):
                 sessions = await get_completed_sessions(db, user.id, limit=1)
                 
                 if sessions:
+                    # ПРОВЕРКА ДЛЯ ДЕМО
+                    if sessions[0].diagnostic_mode == "demo":
+                        await show_paywall(message, demo_completed=True)
+                        return
+
                     await message.answer(
                         "📋 <b>План развития</b>\n\n"
                         "У тебя есть завершённая диагностика!\n"
