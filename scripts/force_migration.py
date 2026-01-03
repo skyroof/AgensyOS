@@ -1,5 +1,11 @@
 import asyncio
 import logging
+import sys
+import os
+
+# Add project root to python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.db.session import init_db
 from src.db.models import Base
 

@@ -42,13 +42,7 @@ def get_start_with_history_keyboard(has_completed: bool = False, best_score: int
         InlineKeyboardButton(text="🎨 Дизайнер", callback_data="role:designer"),
         InlineKeyboardButton(text="📊 Продакт", callback_data="role:product"),
     )
-    if has_completed:
-        history_text = "📊 Мои результаты"
-        if best_score:
-            history_text = f"📊 Мои результаты ({best_score}/100)"
-        builder.row(
-            InlineKeyboardButton(text=history_text, callback_data="show_history"),
-        )
+    # History button removed to avoid duplication with persistent menu
     builder.row(
         InlineKeyboardButton(text="💳 Баланс / Купить", callback_data="buy_menu"),
     )
@@ -322,7 +316,6 @@ def get_post_diagnostic_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="🚀 Создать PDP", callback_data="pdp_start"),
-        InlineKeyboardButton(text="📊 История", callback_data="show_history"),
     )
     builder.row(
         InlineKeyboardButton(text="🔄 Новая диагностика", callback_data="restart"),
@@ -336,10 +329,8 @@ def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="🔄 Пройти снова", callback_data="restart"),
-        InlineKeyboardButton(text="📊 История", callback_data="show_history"),
     )
     builder.row(
-        InlineKeyboardButton(text="📚 Мой PDP", callback_data="pdp_menu"),
         InlineKeyboardButton(text="🏠 В главное меню", callback_data="main_menu"),
     )
     return builder.as_markup()
@@ -362,11 +353,6 @@ def get_oto_keyboard() -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="🙅‍♂️ Нет, спасибо", callback_data="delete_message"),
-    )
-    return builder.as_markup()
-    builder.row(
-        InlineKeyboardButton(text="🔄 Пройти снова", callback_data="restart"),
-        InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu"),
     )
     return builder.as_markup()
 

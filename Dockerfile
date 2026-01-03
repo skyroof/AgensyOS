@@ -43,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy virtual environment from builder
 COPY --from=builder /app/venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
+ENV PYTHONPATH="/app"
 
 # Copy fonts from builder
 COPY --from=builder /app/assets/fonts /app/assets/fonts

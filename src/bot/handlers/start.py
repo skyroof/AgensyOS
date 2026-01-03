@@ -4,7 +4,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -28,6 +28,11 @@ from src.bot.keyboards.inline import (
     get_paywall_keyboard,
     get_goal_keyboard,
 )
+# Import handlers to avoid code duplication and ensure Main Menu works from start router
+from src.bot.handlers.history import cmd_profile, cmd_history
+from src.bot.handlers.pdp import cmd_pdp
+from src.bot.handlers.payments import cmd_buy
+
 from src.db import get_session
 from src.db.repositories import (
     get_or_create_user,
@@ -233,9 +238,26 @@ async def btn_new_diagnostic(message: Message, state: FSMContext):
 @router.message(F.text == "👤 Профиль")
 async def btn_profile(message: Message, state: FSMContext):
     """Кнопка 'Профиль' — показывает статистику."""
-    # Используем логику cmd_start, но принудительно показываем профиль
-    # Или можно сделать отдельную функцию get_profile_text
-    await cmd_start(message, state)
+    # Перенаправляем на логику профиля из history
+    await cmd_profile(message)
+
+
+@router.message(F.text == "📊 История")
+async def btn_history(message: Message, bot: Bot):
+    """Кнопка 'История'."""
+    await cmd_history(message, bot)
+
+
+@router.message(F.text == "📚 Мой PDP")
+async def btn_pdp(message: Message, state: FSMContext):
+    """Кнопка 'Мой PDP'."""
+    await cmd_pdp(message, state)
+
+
+@router.message(F.text == "💳 Баланс")
+async def btn_balance(message: Message, state: FSMContext):
+    """Кнопка 'Баланс'."""
+    await cmd_buy(message, state)
 
 
 @router.callback_query(F.data.startswith("goal:"), DiagnosticStates.choosing_goal)
