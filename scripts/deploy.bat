@@ -24,7 +24,7 @@ echo [3/4] Pushing to GitHub...
 git push origin main
 
 echo [4/4] Deploying to server...
-ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=10 root@89.169.47.138 "cd /root/bot && git pull && docker compose down && docker compose up -d --build && docker compose exec -T bot python scripts/migrate_mode_column.py && docker compose exec -T bot python scripts/force_migration.py && docker compose exec -T bot python scripts/add_maxvisual200.py && docker logs diagnostic-bot --tail 20"
+ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=10 root@89.169.47.138 "cd /root/bot && git pull && chmod +x deploy.sh && ./deploy.sh"
 
 echo.
 echo ✅ Deploy complete!

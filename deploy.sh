@@ -17,19 +17,19 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
-# 3. Build and restart containers
-echo "🏗️ Building and restarting containers..."
-docker-compose down --remove-orphans
-# Force remove containers to prevent name conflicts
-docker rm -f diagnostic-bot diagnostic-redis diagnostic-db || true
+# 3. Build
+echo "🏗️ Building..."
+docker compose build --no-cache
 
-docker-compose build --no-cache
-docker-compose up -d
-
-# 3.1 Run migrations
+# 3.1 Run migrations (using run --rm to ensure DB is accessible even if bot fails)
 echo "🔄 Running migrations..."
-docker-compose exec -T bot python scripts/migrate_mode_column.py
-docker-compose exec -T bot python scripts/force_migration.py
+docker compose run --rm bot python scripts/migrate_mode_column.py
+docker compose run --rm bot alembic upgrade head
+docker compose run --rm bot python scripts/add_maxvisual200.py
+
+# 3.2 Start bot
+echo "🚀 Starting bot..."
+docker compose up -d
 
 # 4. Cleanup unused images
 echo "🧹 Cleaning up..."
@@ -37,4 +37,4 @@ docker image prune -f
 
 echo "✅ Deployment completed successfully!"
 echo "📜 Logs:"
-docker-compose logs -f --tail=50 bot
+docker compose logs -f --tail=50 bot
