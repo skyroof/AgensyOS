@@ -189,15 +189,16 @@ def generate_pdp_plan(
     - Неделя 4: Интеграция (Микс)
     """
     
-    # Нормализация списка навыков (до 3)
-    if len(focus_skills) < 3:
-        # Добиваем дефолтными если мало
-        defaults = ["depth", "articulation", "growth_orientation"]
-        for d in defaults:
-            if d not in focus_skills and len(focus_skills) < 3:
-                focus_skills.append(d)
+    # Ensure we have at least 3 skills
+    if not focus_skills:
+        focus_skills = ["depth", "systems_thinking", "creativity"]
+    
+    # Pad with cycling if less than 3
+    while len(focus_skills) < 3:
+        focus_skills.extend(focus_skills)
     
     focus_skills = focus_skills[:3]
+    
     skill_names = [METRIC_NAMES_RU.get(s, s) for s in focus_skills]
     
     plan = PdpPlan30(
