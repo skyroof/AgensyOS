@@ -7,6 +7,13 @@ REM ============================================================
 
 setlocal
 
+REM === STEP 0: SYNTAX CHECK ===
+call scripts\check_syntax.bat
+if %ERRORLEVEL% NEQ 0 (
+    echo ⛔ Deploy cancelled due to syntax errors.
+    exit /b 1
+)
+
 if "%~1"=="" (
     set /p COMMIT_MSG="Commit message: "
 ) else (
