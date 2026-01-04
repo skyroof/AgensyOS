@@ -879,458 +879,486 @@ async def ignore_callback_while_processing(callback: CallbackQuery):
 @router.callback_query(F.data == "confirm_answer")
 async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение ответа — запускаем анализ."""
-    data = await state.get_data()
-    
-    # Проверка сессии
-    if "current_question" not in data or "draft_answer" not in data:
-         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-         return
+    try:
+        data = await state.get_data()
+        
+        # Проверка сессии
+        if "current_question" not in data or "draft_answer" not in data:
+             await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+             return
 
-    # Защита от Double Click и Race Conditions
-    await state.set_state(DiagnosticStates.processing_answer)
-    current = data["current_question"]
-    answer_text = data.get("draft_answer", "")
-    
-    # Трекинг времени ответа
-    question_start_time = data.get("question_start_time", time.time())
-    answer_duration = time.time() - question_start_time
-    
-    # Сохраняем статистику ответов
-    answer_stats = data.get("answer_stats", [])
-    answer_stats.append({
-        "question": current,
-        "duration_sec": answer_duration,
-        "length": len(answer_text),
-    })
-    await state.update_data(answer_stats=answer_stats)
-    
-    if not answer_text:
-        await callback.answer("❌ Ответ не найден", show_alert=True)
+        # Защита от Double Click и Race Conditions
+        await state.set_state(DiagnosticStates.processing_answer)
+        current = data["current_question"]
+        answer_text = data.get("draft_answer", "")
+        
+        # Трекинг времени ответа
+        question_start_time = data.get("question_start_time", time.time())
+        answer_duration = time.time() - question_start_time
+        
+        # Сохраняем статистику ответов
+        answer_stats = data.get("answer_stats", [])
+        answer_stats.append({
+            "question": current,
+            "duration_sec": answer_duration,
+            "length": len(answer_text),
+        })
+        await state.update_data(answer_stats=answer_stats)
+        
+        if not answer_text:
+            await callback.answer("❌ Ответ не найден", show_alert=True)
+            return
+        
+        await callback.answer("✅ Анализирую...")
+        
+        # Показываем typing indicator
+        await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
+        
+        total = data.get("total_questions", FULL_QUESTIONS)
+        
+        # Показываем, что анализируем с прогрессом
+        thinking_msg = await callback.message.edit_text(
+            f"🧠 Анализирую ответ {current}/{total}...\n\n<code>▓░░░░░░░░░</code> 10%"
+        )
+    except Exception as e:
+        logger.error(f"Error in confirm_answer init: {e}", exc_info=True)
+        try:
+            await callback.message.answer("😔 Произошла ошибка. Пожалуйста, попробуй еще раз.")
+        except:
+            pass
         return
     
-    await callback.answer("✅ Анализирую...")
-    
-    # Показываем typing indicator
-    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
-    
-    total = data.get("total_questions", FULL_QUESTIONS)
-    
-    # Показываем, что анализируем с прогрессом
-    thinking_msg = await callback.message.edit_text(
-        f"🧠 Анализирую ответ {current}/{total}...\n\n<code>▓░░░░░░░░░</code> 10%"
-    )
-    
-    # Сохраняем ответ
-    conversation_history = data.get("conversation_history", [])
-    analysis_history = data.get("analysis_history", [])
-    
-    current_question = data.get("current_question_text", f"Вопрос {current}")
-    
-    conversation_history.append({
-        "question": current_question,
-        "answer": answer_text,
-    })
-    
-    # Подготавливаем данные
-    db_session_id = data.get("db_session_id")
-    next_question_num = current + 1
-    start_time = time.perf_counter()
-    
-    # === УЛУЧШЕННЫЙ ПРОГРЕСС-БАР ===
-    async def update_progress():
-        """Обновляет прогресс-бар во время AI запросов с анимацией."""
-        is_last_question = current >= total
-        
-        # Разные этапы для разных действий
-        progress_states = [
-            ("▓░░░░░░░░░", "10%", "Читаю ответ..."),
-            ("▓▓░░░░░░░░", "20%", "Анализирую глубину..."),
-            ("▓▓▓░░░░░░░", "30%", "Оцениваю структуру..."),
-            ("▓▓▓▓░░░░░░", "40%", "Выявляю инсайты..."),
-            ("▓▓▓▓▓░░░░░", "50%", "Формирую оценку..."),
-            ("▓▓▓▓▓▓░░░░", "60%", "Сопоставляю с метриками..."),
-        ]
-        
-        # Добавляем финальные шаги в зависимости от контекста
-        if is_last_question:
-            progress_states.extend([
-                ("▓▓▓▓▓▓▓░░░", "70%", "Подготавливаю результаты..."),
-                ("▓▓▓▓▓▓▓▓░░", "80%", "Финализирую анализ..."),
-                ("▓▓▓▓▓▓▓▓▓░", "90%", "Почти готово..."),
-            ])
-        else:
-            progress_states.extend([
-                ("▓▓▓▓▓▓▓░░░", "70%", "Генерирую следующий вопрос..."),
-                ("▓▓▓▓▓▓▓▓░░", "80%", "Оптимизирую формулировку..."),
-                ("▓▓▓▓▓▓▓▓▓░", "90%", "Почти готово..."),
-            ])
-        
-        chat_id = callback.message.chat.id
-        try:
-            for bar, pct, status in progress_states:
-                await asyncio.sleep(1.5)  # Быстрее обновляем
-                await safe_send_chat_action(bot, chat_id, ChatAction.TYPING)
-                try:
-                    await thinking_msg.edit_text(
-                        f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
-                    )
-                except Exception:
-                    pass
-        except asyncio.CancelledError:
-            pass
-    
-    # Запускаем прогресс-бар в фоне
-    progress_task = asyncio.create_task(update_progress())
-    
-    # === ПАРАЛЛЕЛЬНЫЕ AI-ЗАПРОСЫ ===
-    # Запускаем анализ ответа и генерацию следующего вопроса одновременно
-    ai_had_issues = False  # Флаг для уведомления пользователя
-    
-    async def _analyze():
-        """Анализ текущего ответа."""
-        nonlocal ai_had_issues
-        try:
-            return await analyze_answer(
-                question=current_question,
-                answer=answer_text,
-                role=data["role"],
-            )
-        except AIServiceError as e:
-            logger.error(f"AI service error during analysis: {e}")
-            ai_had_issues = True
-            return {
-                "scores": {"depth": 5, "self_awareness": 5, "structure": 5, "honesty": 5, "expertise": 5},
-                "key_insights": ["⚠️ Анализ выполнен с ограничениями"],
-                "gaps": [],
-                "hypothesis": "AI временно недоступен",
-                "_ai_error": True,
-            }
-        except Exception as e:
-            logger.error(f"Analysis failed: {e}")
-            return {
-                "scores": {"depth": 5, "self_awareness": 5, "structure": 5, "honesty": 5, "expertise": 5},
-                "key_insights": [],
-                "gaps": [],
-                "hypothesis": "Анализ недоступен",
-            }
-    
-    async def _generate_next():
-        """Генерация следующего вопроса (если нужен)."""
-        nonlocal ai_had_issues
-        if next_question_num > total:
-            return None
-        
-        # generate_question внутри обрабатывает ошибки и делает fallback
-        # на качественные захардкоженные вопросы по роли.
-        return await generate_question(
-            role=data["role"],
-            role_name=data["role_name"],
-            experience=data["experience_name"],
-            question_number=next_question_num,
-            conversation_history=conversation_history,
-            analysis_history=analysis_history,
-        )
-    
-    # === ПОСЛЕДОВАТЕЛЬНЫЙ ЗАПУСК (качество > скорость) ===
-    # 1. Сначала анализируем текущий ответ
-    # 2. Добавляем анализ в историю
-    # 3. Генерируем следующий вопрос с ПОЛНЫМ контекстом
-    # AI видит и ответ, и его анализ (скоры, инсайты, gaps) — максимальная адаптивность
-    
-    analyze_start = time.perf_counter()
-    analysis = await _analyze()
-    analyze_ms = (time.perf_counter() - analyze_start) * 1000
-    logger.info(f"[PERF] Q{current}: analyze done in {analyze_ms:.0f}ms")
-    
-    # Добавляем анализ в историю ПЕРЕД генерацией следующего вопроса
-    analysis_history.append(analysis)
-    
-    if next_question_num <= total:
-        gen_start = time.perf_counter()
-        next_question = await _generate_next()
-        gen_ms = (time.perf_counter() - gen_start) * 1000
-        logger.info(f"[PERF] Q{current}: generate done in {gen_ms:.0f}ms (total: {analyze_ms + gen_ms:.0f}ms)")
-    else:
-        next_question = None
-    
-    # Убираем из history (добавится в правильном месте ниже)
-    analysis_history.pop()
-    
-    # Останавливаем прогресс-бар
-    progress_task.cancel()
     try:
-        await progress_task
-    except asyncio.CancelledError:
-        pass
-    
-    duration_ms = (time.perf_counter() - start_time) * 1000
-    logger.info(f"Answer {current} processed: {analysis.get('scores', {})} | {duration_ms:.0f}ms total")
-    
-    # Уведомляем пользователя о проблемах с AI (если были)
-    if ai_had_issues:
-        try:
-            from src.utils.error_recovery import get_error_message, ErrorType
-            from src.bot.keyboards.inline import get_error_retry_keyboard
+        # Сохраняем ответ
+        conversation_history = data.get("conversation_history", [])
+        analysis_history = data.get("analysis_history", [])
+        
+        current_question = data.get("current_question_text", f"Вопрос {current}")
+        
+        conversation_history.append({
+            "question": current_question,
+            "answer": answer_text,
+        })
+        
+        # Подготавливаем данные
+        db_session_id = data.get("db_session_id")
+        next_question_num = current + 1
+        start_time = time.perf_counter()
+        
+        # === УЛУЧШЕННЫЙ ПРОГРЕСС-БАР ===
+        async def update_progress():
+            """Обновляет прогресс-бар во время AI запросов с анимацией."""
+            is_last_question = current >= total
             
-            # Показываем информативное сообщение
-            await callback.message.answer(
-                "⚠️ <b>AI работает в упрощённом режиме</b>\n\n"
-                "<i>Сервис временно перегружен, но диагностика продолжается.\n"
-                "Результаты могут быть менее точными.</i>\n\n"
-                "💡 Если хочешь получить полный анализ — попробуй позже.",
-            )
-        except Exception:
-            pass
-    
-    analysis_history.append(analysis)
-    
-    # === ТРАНЗАКЦИЯ: СОХРАНЕНИЕ ОТВЕТА И ПРОГРЕССА ===
-    if db_session_id:
-        try:
-            async with get_session() as db:
-                # 1. Сохраняем ответ (без коммита)
-                await save_answer(
-                    session=db,
-                    diagnostic_session_id=db_session_id,
-                    question_number=current,
-                    question_text=current_question,
-                    answer_text=answer_text,
-                    analysis=analysis,
-                    commit=False,
-                )
-                
-                # 2. Если есть следующий вопрос, обновляем прогресс (без коммита)
-                if next_question_num <= total:
-                    await update_session_progress(
-                        session=db,
-                        session_id=db_session_id,
-                        current_question=next_question_num,
-                        conversation_history=conversation_history,
-                        analysis_history=analysis_history,
-                        commit=False,
-                    )
-                
-                # 3. Фиксируем транзакцию
-                await db.commit()
-                
-        except Exception as e:
-            logger.error(f"Failed to save answer/progress to DB: {e}")
-    
-    # Проверяем, есть ли ещё вопросы
-    if next_question_num <= total:
-        
-        await state.update_data(
-            current_question=next_question_num,
-            current_question_text=next_question,
-            conversation_history=conversation_history,
-            analysis_history=analysis_history,
-            question_start_time=time.time(),  # Трекаем время для следующего вопроса
-        )
-        
-        # === PROGRESS & GAMIFICATION ===
-        progress_msg = generate_progress_message(
-            current_question=current,
-            total_questions=total,
-            answer_stats=data.get("answer_stats", []),
-            answer_text=answer_text,
-        )
-        
-        # Показываем прогресс
-        await thinking_msg.edit_text(progress_msg)
-        await asyncio.sleep(1.5)  # Даём время прочитать
-        
-        # Показываем следующий вопрос
-        await callback.message.answer(
-            f"<b>Вопрос {next_question_num}/{total}</b>\n\n{next_question}",
-        )
-        await state.set_state(DiagnosticStates.answering)
-        
-        # Запускаем таймер напоминания для следующего вопроса
-        await start_reminder(callback.from_user.id, db_session_id)
-    else:
-        # Все вопросы заданы — генерируем детальный отчёт
-        await cancel_reminder(callback.from_user.id, db_session_id)  # Отменяем таймер
-        from aiogram.enums import ChatAction
-        
-        # Устанавливаем state generating_report для защиты от race condition
-        await state.set_state(DiagnosticStates.generating_report)
-        
-        await state.update_data(
-            conversation_history=conversation_history,
-            analysis_history=analysis_history,
-        )
-        
-        # === ФИНАЛЬНЫЕ ACHIEVEMENTS ===
-        final_stats = data.get("answer_stats", [])
-        achievements = generate_final_achievements(final_stats)
-        
-        # Показываем итоговый прогресс и достижения
-        await thinking_msg.edit_text(
-            "🎉 <b>Диагностика завершена!</b>\n\n"
-            "<code>██████████</code> 100%\n"
-            f"{achievements}"
-        )
-        await asyncio.sleep(2)  # Даём прочитать достижения
-        
-        # Теперь генерируем отчёт
-        report_msg = await callback.message.answer(
-            "📊 <b>Генерирую детальный AI-отчёт...</b>\n\n"
-            "⚠️ <b>Внимание:</b> Это может занять до 10 минут из-за большого объема данных.\n"
-            "Пожалуйста, не закрывайте чат.\n\n"
-            "<code>▓░░░░░░░░░</code> 10%\n\n"
-            "<i>Анализирую все 10 ответов...</i>"
-        )
-        
-        # Улучшенный прогресс-бар для отчёта
-        async def report_progress():
+            # Разные этапы для разных действий
             progress_states = [
-                ("▓░░░░░░░░░", "10%", "Собираю данные диагностики..."),
-                ("▓▓░░░░░░░░", "20%", "Анализирую 10 ответов..."),
-                ("▓▓▓░░░░░░░", "30%", "Выявляю паттерны..."),
-                ("▓▓▓▓░░░░░░", "40%", "Вычисляю 12 метрик..."),
-                ("▓▓▓▓▓░░░░░", "50%", "Формирую профиль..."),
-                ("▓▓▓▓▓▓░░░░", "60%", "Генерирую рекомендации..."),
-                ("▓▓▓▓▓▓▓░░░", "70%", "Составляю план развития..."),
-                ("▓▓▓▓▓▓▓▓░░", "80%", "Сравниваю с рынком..."),
-                ("▓▓▓▓▓▓▓▓▓░", "90%", "Финализирую отчёт..."),
+                ("▓░░░░░░░░░", "10%", "Читаю ответ..."),
+                ("▓▓░░░░░░░░", "20%", "Анализирую глубину..."),
+                ("▓▓▓░░░░░░░", "30%", "Оцениваю структуру..."),
+                ("▓▓▓▓░░░░░░", "40%", "Выявляю инсайты..."),
+                ("▓▓▓▓▓░░░░░", "50%", "Формирую оценку..."),
+                ("▓▓▓▓▓▓░░░░", "60%", "Сопоставляю с метриками..."),
             ]
             
-            long_wait_messages = [
-                "🤔 Анализирую полный контекст диалога...",
-                "🧠 Формирую глубокие выводы...",
-                "📚 Обрабатываю большой объем данных...",
-                "✍️ Оформляю структуру отчёта...",
-                "🔍 Проверяю каждую деталь...",
-                "⏳ Осталось совсем немного..."
-            ]
+            # Добавляем финальные шаги в зависимости от контекста
+            if is_last_question:
+                progress_states.extend([
+                    ("▓▓▓▓▓▓▓░░░", "70%", "Подготавливаю результаты..."),
+                    ("▓▓▓▓▓▓▓▓░░", "80%", "Финализирую анализ..."),
+                    ("▓▓▓▓▓▓▓▓▓░", "90%", "Почти готово..."),
+                ])
+            else:
+                progress_states.extend([
+                    ("▓▓▓▓▓▓▓░░░", "70%", "Генерирую следующий вопрос..."),
+                    ("▓▓▓▓▓▓▓▓░░", "80%", "Оптимизирую формулировку..."),
+                    ("▓▓▓▓▓▓▓▓▓░", "90%", "Почти готово..."),
+                ])
             
+            chat_id = callback.message.chat.id
             try:
-                # Основные этапы (первые ~90 секунд)
                 for bar, pct, status in progress_states:
-                    await asyncio.sleep(10)  # Увеличили интервал
-                    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
+                    await asyncio.sleep(1.5)  # Быстрее обновляем
+                    await safe_send_chat_action(bot, chat_id, ChatAction.TYPING)
                     try:
-                        await report_msg.edit_text(
-                            f"📊 <b>{status}</b>\n\n"
-                            f"⚠️ <i>Генерация может занять до 10 минут</i>\n\n"
-                            f"<code>{bar}</code> {pct}"
+                        await thinking_msg.edit_text(
+                            f"🧠 <b>{status}</b>\n\n<code>{bar}</code> {pct}"
                         )
                     except Exception:
                         pass
-                
-                # Если всё ещё ждём (после 90 сек)
-                i = 0
-                while True:
-                    await asyncio.sleep(20)  # Редкие обновления для долгих ожиданий
-                    await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
-                    msg = long_wait_messages[i % len(long_wait_messages)]
-                    try:
-                        await report_msg.edit_text(
-                            f"📊 <b>{msg}</b>\n\n"
-                            f"⚠️ <i>Пожалуйста, подождите (до 10 мин)...</i>\n\n"
-                            f"<code>▓▓▓▓▓▓▓▓▓░</code> 95%"
-                        )
-                    except Exception:
-                        pass
-                    i += 1
-                    
             except asyncio.CancelledError:
                 pass
         
-        report_task = asyncio.create_task(report_progress())
+        # Запускаем прогресс-бар в фоне
+        progress_task = asyncio.create_task(update_progress())
         
-        # Генерируем детальный отчёт через AI
-        report = ""
-        try:
-            # Ограничиваем время генерации 10 минутами (600 секунд)
-            report = await asyncio.wait_for(
-                generate_detailed_report(
+        # === ПАРАЛЛЕЛЬНЫЕ AI-ЗАПРОСЫ ===
+        # Запускаем анализ ответа и генерацию следующего вопроса одновременно
+        ai_had_issues = False  # Флаг для уведомления пользователя
+        
+        async def _analyze():
+            """Анализ текущего ответа."""
+            nonlocal ai_had_issues
+            try:
+                return await analyze_answer(
+                    question=current_question,
+                    answer=answer_text,
                     role=data["role"],
-                    role_name=data["role_name"],
-                    experience=data["experience_name"],
-                    conversation_history=conversation_history,
-                    analysis_history=analysis_history,
-                ),
-                timeout=600.0
-            )
-        except asyncio.TimeoutError:
-            logger.error("Report generation timed out (600s)")
-            report = await generate_basic_report(data, conversation_history, analysis_history)
-        except Exception as e:
-            logger.error(f"Report generation failed: {e}")
-            # Fallback на базовый отчёт
-            report = await generate_basic_report(data, conversation_history, analysis_history)
+                )
+            except AIServiceError as e:
+                logger.error(f"AI service error during analysis: {e}")
+                ai_had_issues = True
+                return {
+                    "scores": {"depth": 5, "self_awareness": 5, "structure": 5, "honesty": 5, "expertise": 5},
+                    "key_insights": ["⚠️ Анализ выполнен с ограничениями"],
+                    "gaps": [],
+                    "hypothesis": "AI временно недоступен",
+                    "_ai_error": True,
+                }
+            except Exception as e:
+                logger.error(f"Analysis failed: {e}")
+                return {
+                    "scores": {"depth": 5, "self_awareness": 5, "structure": 5, "honesty": 5, "expertise": 5},
+                    "key_insights": [],
+                    "gaps": [],
+                    "hypothesis": "Анализ недоступен",
+                }
         
-        # Останавливаем прогресс-бар отчёта
-        report_task.cancel()
+        async def _generate_next():
+            """Генерация следующего вопроса (если нужен)."""
+            nonlocal ai_had_issues
+            if next_question_num > total:
+                return None
+            
+            # generate_question внутри обрабатывает ошибки и делает fallback
+            # на качественные захардкоженные вопросы по роли.
+            return await generate_question(
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data["experience_name"],
+                question_number=next_question_num,
+                conversation_history=conversation_history,
+                analysis_history=analysis_history,
+            )
+        
+        # === ПОСЛЕДОВАТЕЛЬНЫЙ ЗАПУСК (качество > скорость) ===
+        # 1. Сначала анализируем текущий ответ
+        # 2. Добавляем анализ в историю
+        # 3. Генерируем следующий вопрос с ПОЛНЫМ контекстом
+        # AI видит и ответ, и его анализ (скоры, инсайты, gaps) — максимальная адаптивность
+        
+        analyze_start = time.perf_counter()
+        analysis = await _analyze()
+        analyze_ms = (time.perf_counter() - analyze_start) * 1000
+        logger.info(f"[PERF] Q{current}: analyze done in {analyze_ms:.0f}ms")
+        
+        # Добавляем анализ в историю ПЕРЕД генерацией следующего вопроса
+        analysis_history.append(analysis)
+        
+        if next_question_num <= total:
+            gen_start = time.perf_counter()
+            next_question = await _generate_next()
+            gen_ms = (time.perf_counter() - gen_start) * 1000
+            logger.info(f"[PERF] Q{current}: generate done in {gen_ms:.0f}ms (total: {analyze_ms + gen_ms:.0f}ms)")
+            
+            # Валидация вопроса
+            if not next_question:
+                logger.error(f"Next question is empty for Q{next_question_num}! Using fallback.")
+                from src.core.prompts.questions import get_questions
+                questions = get_questions(data["role"])
+                fallback_idx = min(next_question_num - 1, len(questions) - 1)
+                next_question = questions[fallback_idx]
+        else:
+            next_question = None
+        
+        # Убираем из history (добавится в правильном месте ниже)
+        analysis_history.pop()
+        
+        # Останавливаем прогресс-бар
+        progress_task.cancel()
         try:
-            await report_task
+            await progress_task
         except asyncio.CancelledError:
             pass
         
-        # Удаляем сообщение с прогресс-баром отчёта
-        try:
-            await report_msg.delete()
-        except Exception:
-            pass  # Сообщение уже удалено или недоступно
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        logger.info(f"Answer {current} processed: {analysis.get('scores', {})} | {duration_ms:.0f}ms total")
         
-        # Рассчитываем баллы и калибруем по опыту
-        raw_scores = calculate_category_scores(analysis_history)
-        scores = calibrate_scores(raw_scores, data.get("experience", "middle"))
+        # Уведомляем пользователя о проблемах с AI (если были)
+        if ai_had_issues:
+            try:
+                from src.utils.error_recovery import get_error_message, ErrorType
+                from src.bot.keyboards.inline import get_error_retry_keyboard
+                
+                # Показываем информативное сообщение
+                await callback.message.answer(
+                    "⚠️ <b>AI работает в упрощённом режиме</b>\n\n"
+                    "<i>Сервис временно перегружен, но диагностика продолжается.\n"
+                    "Результаты могут быть менее точными.</i>\n\n"
+                    "💡 Если хочешь получить полный анализ — попробуй позже.",
+                )
+            except Exception:
+                pass
         
-        # Строим профиль компетенций
-        profile = build_profile(
-            role=data["role"],
-            role_name=data["role_name"],
-            experience=data.get("experience", "middle"),
-            experience_name=data.get("experience_name", ""),
-            scores=scores,
-            analysis_history=analysis_history,
-        )
-        profile_text = format_profile_text(profile)
+        analysis_history.append(analysis)
         
-        # Строим PDP
-        raw_averages = scores.get("raw_averages", {})
-        pdp = build_pdp(
-            role=data["role"],
-            role_name=data["role_name"],
-            experience=data.get("experience", "middle"),
-            experience_name=data.get("experience_name", ""),
-            total_score=scores["total"],
-            raw_averages=raw_averages,
-            strengths=profile.strengths,
-        )
-        pdp_text = format_pdp_text(pdp)
-        
-        # Сохраняем результат в БД
-        header = generate_score_header(data, scores)
-        full_report = header + "\n\n" + report
+        # === ТРАНЗАКЦИЯ: СОХРАНЕНИЕ ОТВЕТА И ПРОГРЕССА ===
         if db_session_id:
             try:
                 async with get_session() as db:
-                    await complete_session(
+                    # 1. Сохраняем ответ (без коммита)
+                    await save_answer(
                         session=db,
-                        session_id=db_session_id,
-                        scores=scores,
-                        report=full_report,
+                        diagnostic_session_id=db_session_id,
+                        question_number=current,
+                        question_text=current_question,
+                        answer_text=answer_text,
+                        analysis=analysis,
+                        commit=False,
+                    )
+                    
+                    # 2. Если есть следующий вопрос, обновляем прогресс (без коммита)
+                    if next_question_num <= total:
+                        await update_session_progress(
+                            session=db,
+                            session_id=db_session_id,
+                            current_question=next_question_num,
+                            conversation_history=conversation_history,
+                            analysis_history=analysis_history,
+                            commit=False,
+                        )
+                    
+                    # 3. Фиксируем транзакцию
+                    await db.commit()
+                    
+            except Exception as e:
+                logger.error(f"Failed to save answer/progress to DB: {e}")
+        
+        # Проверяем, есть ли ещё вопросы
+        if next_question_num <= total:
+            
+            await state.update_data(
+                current_question=next_question_num,
+                current_question_text=next_question,
+                conversation_history=conversation_history,
+                analysis_history=analysis_history,
+                question_start_time=time.time(),  # Трекаем время для следующего вопроса
+            )
+            
+            # === PROGRESS & GAMIFICATION ===
+            progress_msg = generate_progress_message(
+                current_question=current,
+                total_questions=total,
+                answer_stats=data.get("answer_stats", []),
+                answer_text=answer_text,
+            )
+            
+            # Показываем прогресс
+            await thinking_msg.edit_text(progress_msg)
+            await asyncio.sleep(1.5)  # Даём время прочитать
+            
+            # Показываем следующий вопрос
+            await callback.message.answer(
+                f"<b>Вопрос {next_question_num}/{total}</b>\n\n{next_question}",
+            )
+            await state.set_state(DiagnosticStates.answering)
+            
+            # Запускаем таймер напоминания для следующего вопроса
+            await start_reminder(callback.from_user.id, db_session_id)
+        else:
+            # Все вопросы заданы — генерируем детальный отчёт
+            await cancel_reminder(callback.from_user.id, db_session_id)  # Отменяем таймер
+            from aiogram.enums import ChatAction
+            
+            # Устанавливаем state generating_report для защиты от race condition
+            await state.set_state(DiagnosticStates.generating_report)
+            
+            await state.update_data(
+                conversation_history=conversation_history,
+                analysis_history=analysis_history,
+            )
+            
+            # === ФИНАЛЬНЫЕ ACHIEVEMENTS ===
+            final_stats = data.get("answer_stats", [])
+            achievements = generate_final_achievements(final_stats)
+            
+            # Показываем итоговый прогресс и достижения
+            await thinking_msg.edit_text(
+                "🎉 <b>Диагностика завершена!</b>\n\n"
+                "<code>██████████</code> 100%\n"
+                f"{achievements}"
+            )
+            await asyncio.sleep(2)  # Даём прочитать достижения
+            
+            # Теперь генерируем отчёт
+            report_msg = await callback.message.answer(
+                "📊 <b>Генерирую детальный AI-отчёт...</b>\n\n"
+                "⚠️ <b>Внимание:</b> Это может занять до 10 минут из-за большого объема данных.\n"
+                "Пожалуйста, не закрывайте чат.\n\n"
+                "<code>▓░░░░░░░░░</code> 10%\n\n"
+                "<i>Анализирую все 10 ответов...</i>"
+            )
+            
+            # Улучшенный прогресс-бар для отчёта
+            async def report_progress():
+                progress_states = [
+                    ("▓░░░░░░░░░", "10%", "Собираю данные диагностики..."),
+                    ("▓▓░░░░░░░░", "20%", "Анализирую 10 ответов..."),
+                    ("▓▓▓░░░░░░░", "30%", "Выявляю паттерны..."),
+                    ("▓▓▓▓░░░░░░", "40%", "Вычисляю 12 метрик..."),
+                    ("▓▓▓▓▓░░░░░", "50%", "Формирую профиль..."),
+                    ("▓▓▓▓▓▓░░░░", "60%", "Генерирую рекомендации..."),
+                    ("▓▓▓▓▓▓▓░░░", "70%", "Составляю план развития..."),
+                    ("▓▓▓▓▓▓▓▓░░", "80%", "Сравниваю с рынком..."),
+                    ("▓▓▓▓▓▓▓▓▓░", "90%", "Финализирую отчёт..."),
+                ]
+                
+                long_wait_messages = [
+                    "🤔 Анализирую полный контекст диалога...",
+                    "🧠 Формирую глубокие выводы...",
+                    "📚 Обрабатываю большой объем данных...",
+                    "✍️ Оформляю структуру отчёта...",
+                    "🔍 Проверяю каждую деталь...",
+                    "⏳ Осталось совсем немного..."
+                ]
+                
+                try:
+                    # Основные этапы (первые ~90 секунд)
+                    for bar, pct, status in progress_states:
+                        await asyncio.sleep(10)  # Увеличили интервал
+                        await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
+                        try:
+                            await report_msg.edit_text(
+                                f"📊 <b>{status}</b>\n\n"
+                                f"⚠️ <i>Генерация может занять до 10 минут</i>\n\n"
+                                f"<code>{bar}</code> {pct}"
+                            )
+                        except Exception:
+                            pass
+                    
+                    # Если всё ещё ждём (после 90 сек)
+                    i = 0
+                    while True:
+                        await asyncio.sleep(20)  # Редкие обновления для долгих ожиданий
+                        await safe_send_chat_action(bot, callback.message.chat.id, ChatAction.TYPING)
+                        msg = long_wait_messages[i % len(long_wait_messages)]
+                        try:
+                            await report_msg.edit_text(
+                                f"📊 <b>{msg}</b>\n\n"
+                                f"⚠️ <i>Пожалуйста, подождите (до 10 мин)...</i>\n\n"
+                                f"<code>▓▓▓▓▓▓▓▓▓░</code> 95%"
+                            )
+                        except Exception:
+                            pass
+                        i += 1
+                        
+                except asyncio.CancelledError:
+                    pass
+            
+            report_task = asyncio.create_task(report_progress())
+            
+            # Генерируем детальный отчёт через AI
+            report = ""
+            try:
+                # Ограничиваем время генерации 10 минутами (600 секунд)
+                report = await asyncio.wait_for(
+                    generate_detailed_report(
+                        role=data["role"],
+                        role_name=data["role_name"],
+                        experience=data["experience_name"],
                         conversation_history=conversation_history,
                         analysis_history=analysis_history,
-                    )
-                    logger.info(f"Session {db_session_id} completed with score {scores['total']}")
-                    
-                    # Планируем напоминание о повторной диагностике через 30 дней
-                    try:
-                        from src.db.repositories.reminder_repo import schedule_diagnostic_reminder, get_or_create_user_settings
+                    ),
+                    timeout=600.0
+                )
+            except asyncio.TimeoutError:
+                logger.error("Report generation timed out (600s)")
+                report = await generate_basic_report(data, conversation_history, analysis_history)
+            except Exception as e:
+                logger.error(f"Report generation failed: {e}")
+                # Fallback на базовый отчёт
+                report = await generate_basic_report(data, conversation_history, analysis_history)
+            
+            # Останавливаем прогресс-бар отчёта
+            report_task.cancel()
+            try:
+                await report_task
+            except asyncio.CancelledError:
+                pass
+            
+            # Удаляем сообщение с прогресс-баром отчёта
+            try:
+                await report_msg.delete()
+            except Exception:
+                pass  # Сообщение уже удалено или недоступно
+            
+            # Рассчитываем баллы и калибруем по опыту
+            raw_scores = calculate_category_scores(analysis_history)
+            scores = calibrate_scores(raw_scores, data.get("experience", "middle"))
+            
+            # Строим профиль компетенций
+            profile = build_profile(
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data.get("experience", "middle"),
+                experience_name=data.get("experience_name", ""),
+                scores=scores,
+                analysis_history=analysis_history,
+            )
+            profile_text = format_profile_text(profile)
+            
+            # Строим PDP
+            raw_averages = scores.get("raw_averages", {})
+            pdp = build_pdp(
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data.get("experience", "middle"),
+                experience_name=data.get("experience_name", ""),
+                total_score=scores["total"],
+                raw_averages=raw_averages,
+                strengths=profile.strengths,
+            )
+            pdp_text = format_pdp_text(pdp)
+            
+            # Сохраняем результат в БД
+            header = generate_score_header(data, scores)
+            full_report = header + "\n\n" + report
+            if db_session_id:
+                try:
+                    async with get_session() as db:
+                        await complete_session(
+                            session=db,
+                            session_id=db_session_id,
+                            scores=scores,
+                            report=full_report,
+                            conversation_history=conversation_history,
+                            analysis_history=analysis_history,
+                        )
+                        logger.info(f"Session {db_session_id} completed with score {scores['total']}")
                         
-                        user_settings = await get_or_create_user_settings(db, db_user_id)
-                        
-                        if user_settings.diagnostic_reminders_enabled:
-                            # Определяем главную зону роста
-                            focus_skill = None
-                            if raw_averages:
-                                sorted_gaps = sorted(raw_averages.items(), key=lambda x: x[1])
-                                if sorted_gaps:
-                                    focus_skill = sorted_gaps[0][0]  # Метрика с самым низким баллом
+                        # Планируем напоминание о повторной диагностике через 30 дней
+                        try:
+                            from src.db.repositories.reminder_repo import schedule_diagnostic_reminder, get_or_create_user_settings
+                            
+                            user_settings = await get_or_create_user_settings(db, db_user_id)
+                            
+                            if user_settings.diagnostic_reminders_enabled:
+                                # Определяем главную зону роста
+                                focus_skill = None
+                                if raw_averages:
+                                    sorted_gaps = sorted(raw_averages.items(), key=lambda x: x[1])
+                                    if sorted_gaps:
+                                        focus_skill = sorted_gaps[0][0]  # Метрика с самым низким баллом
+                                
+    except Exception as e:
+        logger.error(f"Critical error in confirm_answer: {e}", exc_info=True)
+        
+        # Показываем сообщение об ошибке с кнопкой повтора
+        await callback.message.edit_text(
+            "😔 <b>Что-то пошло не так при анализе...</b>\n\n"
+            "AI не смог обработать ответ. Это бывает, если сервис перегружен.\n"
+            "Попробуй нажать кнопку ниже, чтобы повторить попытку.",
+            reply_markup=get_error_retry_keyboard(retry_action="retry_analysis")
+        )
                             
                             await schedule_diagnostic_reminder(
                                 session=db,

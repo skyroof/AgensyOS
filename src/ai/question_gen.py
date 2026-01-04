@@ -54,6 +54,7 @@ async def generate_question(
         
         # Очищаем от лишних пробелов (кавычки убираем промптом)
         question = question.strip()
+        logger.info(f"Generated question {question_number} for {role}: {question[:50]}...")
         
         return question
         
@@ -62,5 +63,7 @@ async def generate_question(
         # Fallback на захардкоженные вопросы
         questions = get_questions(role)
         fallback_idx = min(question_number - 1, len(questions) - 1)
-        return questions[fallback_idx]
+        fallback_q = questions[fallback_idx]
+        logger.info(f"Using fallback question {question_number} for {role}: {fallback_q[:50]}...")
+        return fallback_q
 
