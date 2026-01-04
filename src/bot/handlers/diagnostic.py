@@ -1158,7 +1158,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             
             # Показываем следующий вопрос
             await callback.message.answer(
-                f"<b>Вопрос {next_question_num}/{total}</b>\n\n{next_question}",
+                f"<b>Вопрос {next_question_num}/{total}</b>\n\n{sanitize_html(next_question)}",
             )
             await state.set_state(DiagnosticStates.answering)
             
@@ -1337,8 +1337,9 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                         
                         # Планируем напоминание о повторной диагностике через 30 дней
                         try:
-                            from src.db.repositories.reminder_repo import schedule_diagnostic_reminder, get_or_create_user_settings
+                            from src.db.repositories.reminder_repo import schedule_diagnostic_reminder, get_or_create_user_settings, schedule_smart_reminder
                             
+                            db_user_id = callback.from_user.id
                             user_settings = await get_or_create_user_settings(db, db_user_id)
                             
                             if user_settings.diagnostic_reminders_enabled:
@@ -1349,37 +1350,26 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                                     if sorted_gaps:
                                         focus_skill = sorted_gaps[0][0]  # Метрика с самым низким баллом
                                 
-    except Exception as e:
-        logger.error(f"Critical error in confirm_answer: {e}", exc_info=True)
-        
-        # Показываем сообщение об ошибке с кнопкой повтора
-        await callback.message.edit_text(
-            "😔 <b>Что-то пошло не так при анализе...</b>\n\n"
-            "AI не смог обработать ответ. Это бывает, если сервис перегружен.\n"
-            "Попробуй нажать кнопку ниже, чтобы повторить попытку.",
-            reply_markup=get_error_retry_keyboard(retry_action="retry_analysis")
-        )
-                            
-                            await schedule_diagnostic_reminder(
-                                session=db,
-                                user_id=db_user_id,
-                                session_id=db_session_id,
-                                last_score=scores['total'],
-                                focus_skill=focus_skill,
-                                days_delay=30,
-                            )
-                            
-                            # Планируем Smart Reminder (24ч) - "Провокация"
-                            await schedule_smart_reminder(
-                                session=db,
-                                user_id=db_user_id,
-                                session_id=db_session_id,
-                                hours_delay=24,
-                            )
-                            
-                            logger.info(f"Scheduled reminder for user {db_user_id} in 30 days")
-                    except Exception as re:
-                        logger.warning(f"Failed to schedule reminder: {re}")
+                                await schedule_diagnostic_reminder(
+                                    session=db,
+                                    user_id=db_user_id,
+                                    session_id=db_session_id,
+                                    last_score=scores['total'],
+                                    focus_skill=focus_skill,
+                                    days_delay=30,
+                                )
+                                
+                                # Планируем Smart Reminder (24ч) - "Провокация"
+                                await schedule_smart_reminder(
+                                    session=db,
+                                    user_id=db_user_id,
+                                    session_id=db_session_id,
+                                    hours_delay=24,
+                                )
+                                
+                                logger.info(f"Scheduled reminder for user {db_user_id} in 30 days")
+                        except Exception as re:
+                            logger.warning(f"Failed to schedule reminder: {re}")
                     
             except Exception as e:
                 logger.error(f"Failed to complete session: {e}")
@@ -1453,6 +1443,19 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         
         # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
         asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
+
+    except Exception as e:
+        logger.error(f"Critical error in confirm_answer: {e}", exc_info=True)
+        try:
+            from src.bot.keyboards.inline import get_error_retry_keyboard
+            await callback.message.edit_text(
+                "😔 <b>Что-то пошло не так при анализе...</b>\n\n"
+                "AI не смог обработать ответ. Это бывает, если сервис перегружен.\n"
+                "Попробуй нажать кнопку ниже, чтобы повторить попытку.",
+                reply_markup=get_error_retry_keyboard(retry_action="retry_analysis")
+            )
+        except Exception:
+            pass
 
 
 # === ХРАНИЛИЩЕ ТАЙМЕРОВ FEEDBACK ===

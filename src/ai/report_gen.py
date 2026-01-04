@@ -240,7 +240,7 @@ def sanitize_html(text: str) -> str:
             close_count -= 1
     
     # Убираем потенциально опасные символы
-    text = text.replace('&', '&amp;').replace('</', '</').replace('<', '<')
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     
     # Восстанавливаем теги после экранирования
     for tag in allowed_tags:
