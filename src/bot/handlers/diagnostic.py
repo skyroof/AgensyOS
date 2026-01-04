@@ -1371,8 +1371,8 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                         except Exception as re:
                             logger.warning(f"Failed to schedule reminder: {re}")
                     
-            except Exception as e:
-                logger.error(f"Failed to complete session: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to complete session: {e}")
         
         # === СОХРАНЯЕМ ВСЕ ДАННЫЕ В STATE ДЛЯ ЛЕНИВОЙ ЗАГРУЗКИ ===
         await state.update_data(
