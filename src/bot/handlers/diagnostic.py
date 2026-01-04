@@ -669,10 +669,16 @@ async def handle_new_answer_while_confirming(message: Message, state: FSMContext
     )
 
 
-@router.callback_query(F.data == "edit_answer", DiagnosticStates.confirming_answer)
+@router.callback_query(F.data == "edit_answer")
 async def edit_answer(callback: CallbackQuery, state: FSMContext):
     """Возврат к редактированию ответа."""
     data = await state.get_data()
+    
+    # Проверка сессии
+    if "current_question" not in data:
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        return
+
     current = data.get("current_question", 1)
     question = data.get("current_question_text", "")
     total = data.get("total_questions", FULL_QUESTIONS)
@@ -685,14 +691,20 @@ async def edit_answer(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Введи новый ответ")
 
 
-@router.callback_query(F.data == "pause_session", DiagnosticStates.confirming_answer)
-@router.callback_query(F.data == "pause_session", DiagnosticStates.answering)
+@router.callback_query(F.data == "pause_session")
 async def pause_session(callback: CallbackQuery, state: FSMContext):
     """Пауза диагностики — сохраняем и выходим."""
     from src.db import get_session
     from src.db.repositories import update_session_progress
     
     data = await state.get_data()
+    
+    # Проверка сессии (если данных нет — просто выходим в меню)
+    if "current_question" not in data:
+        await callback.message.edit_text("Сессия не найдена. Возврат в меню.", reply_markup=get_main_menu_reply_keyboard())
+        await state.clear()
+        return
+
     current = data.get("current_question", 1)
     db_session_id = data.get("db_session_id")
     conversation_history = data.get("conversation_history", [])
@@ -864,15 +876,18 @@ async def ignore_callback_while_processing(callback: CallbackQuery):
     await callback.answer("⏳ Обрабатываю...", show_alert=False)
 
 
-@router.callback_query(F.data == "confirm_answer", DiagnosticStates.confirming_answer)
+@router.callback_query(F.data == "confirm_answer")
 async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение ответа — запускаем анализ."""
+    data = await state.get_data()
+    
+    # Проверка сессии
+    if "current_question" not in data or "draft_answer" not in data:
+         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+         return
+
     # Защита от Double Click и Race Conditions
     await state.set_state(DiagnosticStates.processing_answer)
-    
-    from aiogram.enums import ChatAction
-    
-    data = await state.get_data()
     current = data["current_question"]
     answer_text = data.get("draft_answer", "")
     
@@ -1713,9 +1728,15 @@ async def ignore_callbacks_during_report(callback: CallbackQuery):
 
 # ==================== FEEDBACK HANDLERS ====================
 
-@router.callback_query(F.data.startswith("feedback:"), DiagnosticStates.feedback_rating)
+@router.callback_query(F.data.startswith("feedback:"))
 async def process_feedback_rating(callback: CallbackQuery, state: FSMContext):
     """Обработка оценки от пользователя."""
+    data = await state.get_data()
+    if "db_session_id" not in data:
+         await callback.message.edit_text("Спасибо за оценку! (Сессия истекла, не сохраняем)")
+         await callback.answer()
+         return
+
     rating = int(callback.data.split(":")[1])
     
     await state.update_data(feedback_rating=rating)
@@ -1775,10 +1796,15 @@ async def process_feedback_comment(message: Message, state: FSMContext):
     await state.set_state(DiagnosticStates.finished)
 
 
-@router.callback_query(F.data == "skip_feedback_comment", DiagnosticStates.feedback_comment)
+@router.callback_query(F.data == "skip_feedback_comment")
 async def skip_feedback_comment(callback: CallbackQuery, state: FSMContext):
     """Пропуск комментария к feedback."""
     data = await state.get_data()
+    if "db_session_id" not in data:
+         await callback.message.edit_text("Спасибо! (Сессия истекла)")
+         await callback.answer()
+         return
+
     rating = data.get("feedback_rating", 5)
     db_session_id = data.get("db_session_id")
     

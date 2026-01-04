@@ -272,9 +272,12 @@ async def btn_balance(message: Message, state: FSMContext):
     await cmd_buy(message, state)
 
 
-@router.callback_query(F.data.startswith("goal:"), DiagnosticStates.choosing_goal)
+@router.callback_query(F.data.startswith("goal:"))
 async def process_goal(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора цели (Micro-commitment)."""
+    # Проверка сессии не требуется, так как это начало флоу
+    # Но если стейт был сброшен, нам все равно.
+    
     goal = callback.data.split(":")[1]
     await state.update_data(user_goal=goal)
 
@@ -383,9 +386,16 @@ RETURNING_USER_TEXT = """
 """
 
 
-@router.callback_query(F.data.startswith("exp:"), DiagnosticStates.choosing_experience)
+@router.callback_query(F.data.startswith("exp:"))
 async def process_experience(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора опыта."""
+    # Проверка сессии (так как зависит от выбора роли)
+    data = await state.get_data()
+    if "role" not in data:
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        await btn_new_diagnostic(callback.message, state, user=callback.from_user)
+        return
+
     exp_map = {
         "junior": "до 1 года",
         "middle": "1-3 года",

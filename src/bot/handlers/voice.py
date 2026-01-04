@@ -225,9 +225,10 @@ async def process_voice_answer(message: Message, state: FSMContext, bot: Bot):
         )
 
 
-@router.callback_query(F.data == "confirm_voice", DiagnosticStates.confirming_answer)
+@router.callback_query(F.data == "confirm_voice")
 async def confirm_voice_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение голосового ответа — передаём в основной обработчик."""
+    # Валидация будет внутри confirm_answer
     from src.bot.handlers.diagnostic import confirm_answer
     
     # Передаём в основной обработчик подтверждения
@@ -236,10 +237,16 @@ async def confirm_voice_answer(callback: CallbackQuery, state: FSMContext, bot: 
     await confirm_answer(callback, state, bot)
 
 
-@router.callback_query(F.data == "edit_voice", DiagnosticStates.confirming_answer)
+@router.callback_query(F.data == "edit_voice")
 async def edit_voice_text(callback: CallbackQuery, state: FSMContext):
     """Редактирование распознанного текста."""
     data = await state.get_data()
+    
+    # Проверка сессии
+    if "current_question" not in data:
+         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+         return
+
     current_text = data.get("draft_answer", "")
     
     await callback.message.edit_text(
@@ -253,10 +260,16 @@ async def edit_voice_text(callback: CallbackQuery, state: FSMContext):
     await callback.answer("✏️ Отправь исправленный текст")
 
 
-@router.callback_query(F.data == "rerecord_voice", DiagnosticStates.confirming_answer)
+@router.callback_query(F.data == "rerecord_voice")
 async def rerecord_voice(callback: CallbackQuery, state: FSMContext):
     """Перезапись голосового."""
     data = await state.get_data()
+    
+    # Проверка сессии
+    if "current_question" not in data:
+         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+         return
+
     current = data.get("current_question", 1)
     question = data.get("current_question_text", "")
     
