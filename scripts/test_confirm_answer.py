@@ -89,11 +89,12 @@ async def test_confirm_answer_crash():
     
     try:
         await confirm_answer(callback, state, bot)
-        # Should trigger "Ответ не найден"
-        if callback.answer.call_args and "Ответ не найден" in str(callback.answer.call_args):
-            print("✅ Test Case 2 passed (handled missing answer)")
+        # Should trigger "Сессия истекла" because key is missing
+        args = str(callback.answer.call_args)
+        if callback.answer.call_args and "Сессия истекла" in args:
+            print("✅ Test Case 2 passed (handled missing session key)")
         else:
-             print("⚠️ Test Case 2 warning: unexpected behavior")
+             print(f"⚠️ Test Case 2 warning: unexpected response: {args}")
     except Exception as e:
         print(f"❌ Test Case 2 failed: {e}")
 
