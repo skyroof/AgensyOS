@@ -230,13 +230,16 @@ async def cmd_start(message: Message, state: FSMContext):
 
 
 @router.message(F.text == "🚀 Новая диагностика")
-async def btn_new_diagnostic(message: Message, state: FSMContext):
+async def btn_new_diagnostic(message: Message, state: FSMContext, user=None):
     """Кнопка 'Новая диагностика' — начинает новый флоу."""
     # Очищаем состояние перед новой диагностикой
     await state.clear()
     
+    # Определяем пользователя (если вызов из колбэка, message.from_user может быть ботом)
+    target_user = user or message.from_user
+    first_name = target_user.first_name if target_user else "друг"
+
     # Сразу показываем выбор цели (как для новых пользователей)
-    first_name = message.from_user.first_name
     await message.answer(
         get_goal_question_text(first_name),
         reply_markup=get_goal_keyboard(),
@@ -496,7 +499,7 @@ async def process_onboarding_step2(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     if "role" not in data:
         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-        await btn_new_diagnostic(callback.message, state)
+        await btn_new_diagnostic(callback.message, state, user=callback.from_user)
         return
 
     await callback.message.edit_text(
@@ -514,7 +517,7 @@ async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
     # Проверка на наличие сессии
     if "role" not in data:
         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-        await btn_new_diagnostic(callback.message, state)
+        await btn_new_diagnostic(callback.message, state, user=callback.from_user)
         return
 
     await callback.message.edit_text(
@@ -536,7 +539,7 @@ async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
     # Проверка на наличие сессии
     if "role" not in data:
         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-        await btn_new_diagnostic(callback.message, state)
+        await btn_new_diagnostic(callback.message, state, user=callback.from_user)
         return
 
     role = data.get("role", "designer")
@@ -580,14 +583,14 @@ async def process_skip_onboarding(callback: CallbackQuery, state: FSMContext):
     # Проверка на наличие сессии
     if "role" not in data:
         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-        await btn_new_diagnostic(callback.message, state)
+        await btn_new_diagnostic(callback.message, state, user=callback.from_user)
         return
 
     await state.set_state(DiagnosticStates.ready_to_start)
     await callback.message.edit_text(
         f"🚀 <b>Погнали!</b>\n\n"
-        f"Роль: {data['role_name']}\n"
-        f"Опыт: {data['experience_name']}\n\n"
+        f"Роль: {data.get('role_name', 'Специалист')}\n"
+        f"Опыт: {data.get('experience_name', 'Не указан')}\n\n"
         f"10 вопросов ждут!",
         reply_markup=get_start_diagnostic_keyboard(),
     )
@@ -602,7 +605,7 @@ async def process_show_onboarding(callback: CallbackQuery, state: FSMContext):
     # Проверка на наличие сессии
     if "role" not in data:
         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-        await btn_new_diagnostic(callback.message, state)
+        await btn_new_diagnostic(callback.message, state, user=callback.from_user)
         return
 
     role = data.get("role", "designer")
