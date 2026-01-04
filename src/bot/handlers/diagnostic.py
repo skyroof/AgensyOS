@@ -323,23 +323,25 @@ async def cancel_reminder(user_id: int, session_id: int):
         logger.error(f"Failed to cancel reminder: {e}")
 
 
-@router.callback_query(F.data == "start_diagnostic", DiagnosticStates.ready_to_start)
+@router.callback_query(F.data == "start_diagnostic")
 async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Начало диагностики — первый вопрос."""
     # Сразу меняем состояние, чтобы избежать двойного клика
-    await state.set_state(DiagnosticStates.starting)
+    # Но сначала проверим данные!
+    data = await state.get_data()
     
-    try:
-        data = await state.get_data()
-        
-        # Проверяем наличие роли/опыта (если стейт пустой после рестарта)
-        if "role" not in data or "experience" not in data:
-            logger.warning(f"Missing state data for user {callback.from_user.id}")
-            await callback.answer("Сессия истекла. Нажми /start", show_alert=True)
-            await callback.message.answer("⚠️ <b>Сессия истекла</b>\n\nПожалуйста, начни заново: /start")
-            await state.clear()
-            return
+    # Проверяем наличие роли/опыта (если стейт пустой после рестарта)
+    if "role" not in data or "experience" not in data:
+        logger.warning(f"Missing state data for user {callback.from_user.id}")
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        # Лучше не отправлять новое сообщение, а просто алерт, или редирект на старт
+        # await callback.message.answer("⚠️ <b>Сессия истекла</b>\n\nПожалуйста, начни заново: /start")
+        await state.clear()
+        return
 
+    await state.set_state(DiagnosticStates.starting)
+
+    try:
         user_id = callback.from_user.id
         db_user_id = data.get("db_user_id")
         

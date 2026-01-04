@@ -489,9 +489,16 @@ async def process_experience(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "onboarding_step2", DiagnosticStates.onboarding)
+@router.callback_query(F.data == "onboarding_step2")
 async def process_onboarding_step2(callback: CallbackQuery, state: FSMContext):
     """Переход к шагу 2 онбординга."""
+    # Проверка на наличие сессии (если бот перезагрузился)
+    data = await state.get_data()
+    if "role" not in data:
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        await btn_new_diagnostic(callback.message, state)
+        return
+
     await callback.message.edit_text(
         ONBOARDING_STEP2,
         reply_markup=get_onboarding_step2_keyboard(),
@@ -499,10 +506,16 @@ async def process_onboarding_step2(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "onboarding_done", DiagnosticStates.onboarding)
+@router.callback_query(F.data == "onboarding_done")
 async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
     """Завершение онбординга и переход к диагностике."""
     data = await state.get_data()
+
+    # Проверка на наличие сессии
+    if "role" not in data:
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        await btn_new_diagnostic(callback.message, state)
+        return
 
     await callback.message.edit_text(
         f"✅ <b>Всё готово!</b>\n\n"
@@ -515,10 +528,16 @@ async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "onboarding_back", DiagnosticStates.onboarding)
+@router.callback_query(F.data == "onboarding_back")
 async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
     """Возврат к шагу 1 онбординга."""
     data = await state.get_data()
+
+    # Проверка на наличие сессии
+    if "role" not in data:
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        await btn_new_diagnostic(callback.message, state)
+        return
 
     role = data.get("role", "designer")
     exp_key = data.get("experience", "middle")
@@ -553,10 +572,16 @@ async def process_onboarding_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "skip_onboarding", DiagnosticStates.onboarding)
+@router.callback_query(F.data == "skip_onboarding")
 async def process_skip_onboarding(callback: CallbackQuery, state: FSMContext):
     """Пропуск онбординга для возвращающихся пользователей."""
     data = await state.get_data()
+    
+    # Проверка на наличие сессии
+    if "role" not in data:
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        await btn_new_diagnostic(callback.message, state)
+        return
 
     await state.set_state(DiagnosticStates.ready_to_start)
     await callback.message.edit_text(
@@ -569,10 +594,16 @@ async def process_skip_onboarding(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "show_onboarding", DiagnosticStates.onboarding)
+@router.callback_query(F.data == "show_onboarding")
 async def process_show_onboarding(callback: CallbackQuery, state: FSMContext):
     """Показать онбординг по запросу (для возвращающихся)."""
     data = await state.get_data()
+
+    # Проверка на наличие сессии
+    if "role" not in data:
+        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+        await btn_new_diagnostic(callback.message, state)
+        return
 
     role = data.get("role", "designer")
     exp_key = data.get("experience", "middle")
