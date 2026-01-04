@@ -45,9 +45,17 @@ async def send_weekly_digests(session: AsyncSession, bot: Bot) -> None:
     result = await session.execute(stmt)
     subscriptions = result.scalars().all()
 
-    logger.info(f"Found {len(subscriptions)} users for digest")
-
+    # Deduplicate users to avoid spam
+    unique_user_ids = set()
+    users_to_process = []
     for sub in subscriptions:
+        if sub.user_id not in unique_user_ids:
+            unique_user_ids.add(sub.user_id)
+            users_to_process.append(sub)
+
+    logger.info(f"Found {len(users_to_process)} unique users for digest")
+
+    for sub in users_to_process:
         try:
             await process_user_digest(session, bot, sub.user_id)
         except Exception as e:
@@ -153,13 +161,30 @@ async def process_user_digest(session: AsyncSession, bot: Bot, user_id: int) -> 
         await bot.send_message(user.telegram_id, message_text, parse_mode="HTML")
 
         # Save history
+        # Truncate fields to fit DB constraints (temporary fix until schema migration)
+        reason = content_data.get("reason", "")
+        if reason and len(reason) > 50:
+            reason = reason[:47] + "..."
+            
+        title = content_data.get("title", "Unknown")
+        if title and len(title) > 255:
+            title = title[:252] + "..."
+            
+        url_val = url
+        if url_val and len(url_val) > 500:
+            url_val = url_val[:500]
+            
+        skill_val = skill
+        if skill_val and len(skill_val) > 50:
+            skill_val = skill_val[:50]
+
         history = UserContentHistory(
             user_id=user_id,
             content_type=content_data.get("type", "article"),
-            title=content_data.get("title", "Unknown"),
-            url=url,
-            metric=skill,
-            reason=content_data.get("reason"),
+            title=title,
+            url=url_val,
+            metric=skill_val,
+            reason=reason,
             sent_at=datetime.utcnow(),
         )
         session.add(history)
