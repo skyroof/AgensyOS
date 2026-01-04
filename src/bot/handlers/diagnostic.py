@@ -897,7 +897,10 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         answer_duration = time.time() - question_start_time
         
         # Сохраняем статистику ответов
-        answer_stats = data.get("answer_stats", [])
+        answer_stats = data.get("answer_stats")
+        if not isinstance(answer_stats, list):
+            answer_stats = []
+            
         answer_stats.append({
             "question": current,
             "duration_sec": answer_duration,
@@ -907,6 +910,8 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         
         if not answer_text:
             await callback.answer("❌ Ответ не найден", show_alert=True)
+            # Возвращаем состояние, чтобы можно было попробовать снова
+            await state.set_state(DiagnosticStates.answering)
             return
         
         await callback.answer("✅ Анализирую...")
@@ -917,11 +922,20 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         total = data.get("total_questions", FULL_QUESTIONS)
         
         # Показываем, что анализируем с прогрессом
-        thinking_msg = await callback.message.edit_text(
-            f"🧠 Анализирую ответ {current}/{total}...\n\n<code>▓░░░░░░░░░</code> 10%"
-        )
+        # Пытаемся редактировать, если не выйдет — отправляем новое
+        try:
+            thinking_msg = await callback.message.edit_text(
+                f"🧠 Анализирую ответ {current}/{total}...\n\n<code>▓░░░░░░░░░</code> 10%"
+            )
+        except Exception:
+            thinking_msg = await callback.message.answer(
+                f"🧠 Анализирую ответ {current}/{total}...\n\n<code>▓░░░░░░░░░</code> 10%"
+            )
+            
     except Exception as e:
         logger.error(f"Error in confirm_answer init: {e}", exc_info=True)
+        # ВАЖНО: Возвращаем состояние, иначе юзер застрянет
+        await state.set_state(DiagnosticStates.answering)
         try:
             await callback.message.answer("😔 Произошла ошибка. Пожалуйста, попробуй еще раз.")
         except:
