@@ -231,8 +231,17 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.message(F.text == "🚀 Новая диагностика")
 async def btn_new_diagnostic(message: Message, state: FSMContext):
-    """Кнопка 'Новая диагностика' — аналог /start."""
-    await cmd_start(message, state)
+    """Кнопка 'Новая диагностика' — начинает новый флоу."""
+    # Очищаем состояние перед новой диагностикой
+    await state.clear()
+    
+    # Сразу показываем выбор цели (как для новых пользователей)
+    first_name = message.from_user.first_name
+    await message.answer(
+        get_goal_question_text(first_name),
+        reply_markup=get_goal_keyboard(),
+    )
+    await state.set_state(DiagnosticStates.choosing_goal)
 
 
 @router.message(F.text == "👤 Профиль")
