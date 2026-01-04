@@ -290,15 +290,23 @@ async def choose_time(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PdpStates.choosing_style)
 
 
-@router.callback_query(F.data.startswith("pdp:style:"), PdpStates.choosing_style)
+@router.callback_query(F.data.startswith("pdp:style:"))
 async def choose_style_and_create(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Выбор стиля и создание плана."""
+    
+    # Проверка данных состояния перед началом
+    data = await state.get_data()
+    daily_time = data.get("daily_time")
+    session_id = data.get("session_id")
+
+    if not daily_time or not session_id:
+        await callback.answer("❌ Сессия истекла", show_alert=True)
+        await callback.message.edit_text("❌ Сессия истекла. Начни создание плана заново: /pdp")
+        return
+
     await callback.answer("🔄 Создаю план...")
     
     style = callback.data.split(":")[2]
-    data = await state.get_data()
-    daily_time = data.get("daily_time", 30)
-    session_id = data.get("session_id")
     
     await state.clear()
     
