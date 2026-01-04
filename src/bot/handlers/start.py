@@ -289,7 +289,7 @@ async def process_goal(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("role:"), DiagnosticStates.choosing_role)
+@router.callback_query(F.data.startswith("role:"))
 async def process_role(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора роли."""
     role = callback.data.split(":")[1]
