@@ -1442,8 +1442,6 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         )
         
         # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
-        asyncio.create_task(_send_delayed_feedback(bot, callback.message.chat.id, db_session_id))
-
     except Exception as e:
         logger.error(f"Critical error in confirm_answer: {e}", exc_info=True)
         try:
