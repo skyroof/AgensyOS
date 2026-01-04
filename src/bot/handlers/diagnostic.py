@@ -890,7 +890,8 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         # Защита от Double Click и Race Conditions
         await state.set_state(DiagnosticStates.processing_answer)
         current = data["current_question"]
-        answer_text = data.get("draft_answer", "")
+        # Гарантируем, что answer_text - строка, даже если в data лежит None
+        answer_text = data.get("draft_answer") or ""
         
         # Трекинг времени ответа
         question_start_time = data.get("question_start_time", time.time())
@@ -1016,7 +1017,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 return await analyze_answer(
                     question=current_question,
                     answer=answer_text,
-                    role=data["role"],
+                    role=data.get("role", "product"),
                 )
             except AIServiceError as e:
                 logger.error(f"AI service error during analysis: {e}")
@@ -1046,9 +1047,9 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             # generate_question внутри обрабатывает ошибки и делает fallback
             # на качественные захардкоженные вопросы по роли.
             return await generate_question(
-                role=data["role"],
-                role_name=data["role_name"],
-                experience=data["experience_name"],
+                role=data.get("role", "product"),
+                role_name=data.get("role_name", "Product Manager"),
+                experience=data.get("experience_name", "Middle"),
                 question_number=next_question_num,
                 conversation_history=conversation_history,
                 analysis_history=analysis_history,
@@ -1162,7 +1163,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             progress_msg = generate_progress_message(
                 current_question=current,
                 total_questions=total,
-                answer_stats=data.get("answer_stats", []),
+                answer_stats=answer_stats,
                 answer_text=answer_text,
             )
             
@@ -1181,7 +1182,6 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         else:
             # Все вопросы заданы — генерируем детальный отчёт
             await cancel_reminder(callback.from_user.id, db_session_id)  # Отменяем таймер
-            from aiogram.enums import ChatAction
             
             # Устанавливаем state generating_report для защиты от race condition
             await state.set_state(DiagnosticStates.generating_report)
@@ -1388,72 +1388,72 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 except Exception as e:
                     logger.error(f"Failed to complete session: {e}")
         
-        # === СОХРАНЯЕМ ВСЕ ДАННЫЕ В STATE ДЛЯ ЛЕНИВОЙ ЗАГРУЗКИ ===
-        await state.update_data(
-            result_report=report,
-            result_profile=profile_text,
-            result_pdp=pdp_text,
-            result_scores=scores,
-            result_header=header,
-        )
-        await state.set_state(DiagnosticStates.finished)
-        
-        # === ДИАГНОСТИКА: ЛОГИРУЕМ ДЛИНЫ ВСЕХ СЕКЦИЙ ===
-        logger.info(
-            f"[MSG_LEN] Generated results for user {callback.from_user.id}: "
-            f"header={len(header)}, report={len(report)}, "
-            f"profile={len(profile_text)}, pdp={len(pdp_text)}, "
-            f"summary={len(generate_summary_card(data, scores, profile))}"
-        )
-        
-        # === ДЕМО VS ПОЛНАЯ ВЕРСИЯ ===
-        diagnostic_mode = data.get("diagnostic_mode", "full")
-        
-        if diagnostic_mode == "demo":
-            # ДЕМО: Урезанный отчёт + paywall
-            demo_summary = generate_demo_summary_card(data, scores, profile)
-            await thinking_msg.edit_text(demo_summary, reply_markup=get_demo_result_keyboard())
-            logger.info(f"Demo diagnostic completed for user {callback.from_user.id}")
-        else:
-            # ПОЛНАЯ ВЕРСИЯ: Summary Card
-            summary_card = generate_summary_card(data, scores, profile)
+            # === СОХРАНЯЕМ ВСЕ ДАННЫЕ В STATE ДЛЯ ЛЕНИВОЙ ЗАГРУЗКИ ===
+            await state.update_data(
+                result_report=report,
+                result_profile=profile_text,
+                result_pdp=pdp_text,
+                result_scores=scores,
+                result_header=header,
+            )
+            await state.set_state(DiagnosticStates.finished)
             
-            # Выбираем клавиатуру
-            if db_session_id:
-                keyboard = get_result_summary_keyboard(db_session_id)
+            # === ДИАГНОСТИКА: ЛОГИРУЕМ ДЛИНЫ ВСЕХ СЕКЦИЙ ===
+            logger.info(
+                f"[MSG_LEN] Generated results for user {callback.from_user.id}: "
+                f"header={len(header)}, report={len(report)}, "
+                f"profile={len(profile_text)}, pdp={len(pdp_text)}, "
+                f"summary={len(generate_summary_card(data, scores, profile))}"
+            )
+        
+            # === ДЕМО VS ПОЛНАЯ ВЕРСИЯ ===
+            diagnostic_mode = data.get("diagnostic_mode", "full")
+            
+            if diagnostic_mode == "demo":
+                # ДЕМО: Урезанный отчёт + paywall
+                demo_summary = generate_demo_summary_card(data, scores, profile)
+                await thinking_msg.edit_text(demo_summary, reply_markup=get_demo_result_keyboard())
+                logger.info(f"Demo diagnostic completed for user {callback.from_user.id}")
             else:
-                keyboard = get_restart_keyboard()
-            
-            await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
-            
+                # ПОЛНАЯ ВЕРСИЯ: Summary Card
+                summary_card = generate_summary_card(data, scores, profile)
+                
+                # Выбираем клавиатуру
+                if db_session_id:
+                    keyboard = get_result_summary_keyboard(db_session_id)
+                else:
+                    keyboard = get_restart_keyboard()
+                
+                await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
+                
             # === ONE-TIME OFFER (OTO) ===
-        # Предлагаем скидку 30% на Pack 3 сразу после результата
-        await asyncio.sleep(2)
-        await callback.message.answer(
-            "🔥 <b>Специальное предложение!</b>\n\n"
-            "Только сейчас: пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n\n"
-            "Обычная цена: <s>990₽</s>\n"
-            "<b>Твоя цена: 690₽</b>\n\n"
-            "<i>Предложение действует 15 минут.</i>",
-            reply_markup=get_oto_keyboard(),
-        )
-        
-        # Добавляем подсказку про PDP, если он ещё не создан
-        await asyncio.sleep(1)
-        await callback.message.answer(
-            "🚀 <b>Что делать дальше?</b>\n\n"
-            "1. Изучи детальный отчёт (кнопка выше)\n"
-            "2. Создай персональный план развития (PDP)\n"
-            "3. Отслеживай прогресс в /history\n\n"
-            "👇 <i>Используй меню внизу для навигации</i>",
-            reply_markup=get_post_diagnostic_keyboard()
-        )
-        
-        # Обновляем нижнее меню
-        await callback.message.answer(
-            "Меню обновлено:", 
-            reply_markup=get_main_menu_reply_keyboard()
-        )
+            # Предлагаем скидку 30% на Pack 3 сразу после результата
+            await asyncio.sleep(2)
+            await callback.message.answer(
+                "🔥 <b>Специальное предложение!</b>\n\n"
+                "Только сейчас: пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n\n"
+                "Обычная цена: <s>990₽</s>\n"
+                "<b>Твоя цена: 690₽</b>\n\n"
+                "<i>Предложение действует 15 минут.</i>",
+                reply_markup=get_oto_keyboard(),
+            )
+            
+            # Добавляем подсказку про PDP, если он ещё не создан
+            await asyncio.sleep(1)
+            await callback.message.answer(
+                "🚀 <b>Что делать дальше?</b>\n\n"
+                "1. Изучи детальный отчёт (кнопка выше)\n"
+                "2. Создай персональный план развития (PDP)\n"
+                "3. Отслеживай прогресс в /history\n\n"
+                "👇 <i>Используй меню внизу для навигации</i>",
+                reply_markup=get_post_diagnostic_keyboard()
+            )
+            
+            # Обновляем нижнее меню
+            await callback.message.answer(
+                "Меню обновлено:", 
+                reply_markup=get_main_menu_reply_keyboard()
+            )
         
         # === ОТЛОЖЕННЫЙ FEEDBACK (через 3 минуты) ===
     except Exception as e:
