@@ -1435,6 +1435,9 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 "🔥 <b>Специальное предложение!</b>\n"
                 "Пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n"
                 "Обычная цена: <s>990₽</s> → <b>690₽</b>\n\n"
+                "🎓 <b>Рекомендация от автора:</b>\n"
+                "Прокачай свой визуал и скиллы до ТОП-уровня за 3 месяца!\n"
+                "Студия MAX (клиенты: ВкусВилл, Самокат, Яндекс) запускает курс.\n\n"
                 "🚀 <b>Твой план действий:</b>\n"
                 "1. Изучи детальный отчёт (кнопка выше)\n"
                 "2. Создай персональный план развития (PDP)\n"
@@ -1445,7 +1448,10 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             from aiogram.utils.keyboard import InlineKeyboardBuilder
             combined_builder = InlineKeyboardBuilder()
             combined_builder.row(
-                InlineKeyboardButton(text="🔥 Забрать за 690₽", callback_data="oto_buy:pack3")
+                InlineKeyboardButton(text="🎓 Курс по дизайну", url="https://laitner.notion.site/3-2c975decbb2880c8afa6cf2824326144?source=copy_link")
+            )
+            combined_builder.row(
+                InlineKeyboardButton(text="🔥 Забрать 3 диагностики за 690₽", callback_data="oto_buy:pack3")
             )
             combined_builder.row(
                 InlineKeyboardButton(text="🚀 Создать PDP", callback_data="pdp:create")
