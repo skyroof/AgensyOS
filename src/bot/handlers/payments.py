@@ -46,7 +46,6 @@ router = Router(name="payments")
 # ==================== /buy COMMAND ====================
 
 @router.message(Command("buy"))
-@router.message(F.text == "💳 Баланс")
 async def cmd_buy(message: Message, state: FSMContext):
     """Показать тарифы и кнопки покупки."""
     await show_pricing(message)
@@ -730,6 +729,7 @@ async def show_balance_callback(callback: CallbackQuery):
 
 
 @router.message(Command("balance"))
+@router.message(F.text == "💳 Баланс")
 async def cmd_balance(message: Message):
     """Показать баланс пользователя."""
     user_id = message.from_user.id

@@ -1,5 +1,5 @@
 """
-Deep Diagnostic Bot — точка входа.
+MAX Diagnostic Bot — точка входа.
 """
 import asyncio
 import logging

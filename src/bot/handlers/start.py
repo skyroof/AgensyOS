@@ -50,7 +50,7 @@ SESSION_TTL_HOURS = 24
 
 # Базовый текст приветствия (без персонализации)
 WELCOME_TEXT = """
-🎯 <b>Deep Diagnostic Bot</b>
+🎯 <b>MAX Diagnostic Bot</b>
 
 Я помогу оценить твой уровень как специалиста за <b>10 глубоких вопросов</b>.
 
@@ -88,7 +88,7 @@ def get_goal_question_text(first_name: str) -> str:
 def get_welcome_text(first_name: str, balance_info: str = "") -> str:
     """Персонализированное приветствие."""
     return f"""
-🎯 <b>Deep Diagnostic Bot</b>
+🎯 <b>MAX Diagnostic Bot</b>
 
 Привет, <b>{first_name}</b>! 👋
 
