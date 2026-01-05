@@ -529,10 +529,10 @@ async def handle_answer(message: Message, state: FSMContext, bot: Bot):
         f"<b>Твой ответ:</b>\n\n{answer_text}\n\nОтправляем или хочешь дополнить?",
         reply_markup=get_confirm_answer_keyboard()
     )
-    await state.set_state(DiagnosticStates.confirm_answer)
+    await state.set_state(DiagnosticStates.confirming_answer)
 
 
-@router.callback_query(DiagnosticStates.confirm_answer, F.data == "confirm_answer")
+@router.callback_query(DiagnosticStates.confirming_answer, F.data == "confirm_answer")
 async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение ответа — переход к следующему вопросу."""
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -657,7 +657,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.message.answer("Произошла ошибка. Попробуй ответить еще раз.")
 
 
-@router.callback_query(DiagnosticStates.confirm_answer, F.data == "edit_answer")
+@router.callback_query(DiagnosticStates.confirming_answer, F.data == "edit_answer")
 async def edit_answer(callback: CallbackQuery, state: FSMContext):
     """Редактирование ответа (просто просим ввести заново)."""
     await callback.message.edit_text("Хорошо, напиши новый ответ:")
