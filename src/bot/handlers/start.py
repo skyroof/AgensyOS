@@ -31,6 +31,7 @@ from src.bot.keyboards.inline import (
 # Import handlers to avoid code duplication and ensure Main Menu works from start router
 from src.bot.handlers.history import cmd_profile, cmd_history
 from src.bot.handlers.pdp import cmd_pdp
+from src.bot.handlers.payments import cmd_balance
 
 from src.db import get_session
 from src.db.repositories import (
@@ -263,6 +264,12 @@ async def btn_history(message: Message, bot: Bot):
 async def btn_pdp(message: Message, state: FSMContext):
     """Кнопка 'Мой PDP'."""
     await cmd_pdp(message, state)
+
+
+@router.message(F.text == "💳 Баланс")
+async def btn_balance(message: Message):
+    """Кнопка 'Баланс'."""
+    await cmd_balance(message)
 
 
 @router.callback_query(F.data.startswith("goal:"))

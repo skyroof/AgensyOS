@@ -176,9 +176,10 @@ async def cmd_profile(message: Message):
                 )
                 return
             
-            sessions = await get_user_sessions(db, user.id, limit=1)
+            # Получаем последнюю завершённую сессию
+            sessions = await get_completed_sessions(db, user.id, limit=1)
             
-            if not sessions or sessions[0].status != "completed":
+            if not sessions:
                 await message.answer(
                     "📭 Нет завершённых диагностик.",
                     reply_markup=get_back_to_menu_keyboard(),
