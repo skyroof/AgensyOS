@@ -144,13 +144,11 @@ async def schedule_stuck_reminder(
 
 async def cancel_stuck_reminders(
     session: AsyncSession,
-    user_id: int,
     session_id: int,
 ) -> None:
     """Отменить все stuck-напоминания для сессии (когда юзер ответил)."""
     stmt = (
         update(DiagnosticReminder)
-        .where(DiagnosticReminder.user_id == user_id)
         .where(DiagnosticReminder.session_id == session_id)
         .where(DiagnosticReminder.reminder_type.like("stuck_%"))
         .where(DiagnosticReminder.sent.is_(False))

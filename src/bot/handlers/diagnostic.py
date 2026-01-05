@@ -92,11 +92,11 @@ async def start_reminder(user_id: int, session_id: int):
         logger.error(f"Failed to schedule reminder: {e}")
 
 
-async def cancel_reminder(user_id: int, session_id: int):
+async def cancel_reminder(session_id: int):
     """Отменить таймер напоминания."""
     try:
         async with get_session() as db:
-            await cancel_stuck_reminders(db, user_id, session_id)
+            await cancel_stuck_reminders(db, session_id)
             await db.commit()
     except Exception as e:
         logger.error(f"Failed to cancel reminder: {e}")
@@ -684,7 +684,7 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
     db_session_id = data.get("db_session_id")
     user_id = message.from_user.id
     if db_session_id:
-        await cancel_reminder(user_id, db_session_id)
+        await cancel_reminder(db_session_id)
         
     await message.answer(
         "🎉 <b>Поздравляю! Диагностика завершена.</b>\n\n"
@@ -708,9 +708,9 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
         # Генерация текста отчета
         report_text = await generate_detailed_report(
             role=data["role"],
+            role_name=data["role_name"],
             experience=data["experience"],
-            scores=scores,
-            history=history,
+            conversation_history=history,
             analysis_history=analysis_history
         )
         
@@ -761,7 +761,26 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
     except Exception as e:
         logger.error(f"Error generating report: {e}", exc_info=True)
         # Fallback отчет
-        fallback_report = generate_fallback_report(scores if 'scores' in locals() else {})
+        if 'scores' not in locals():
+            try:
+                scores = calculate_category_scores(analysis_history)
+            except:
+                scores = {'total': 0, 'hard_skills': 0, 'soft_skills': 0, 'thinking': 0, 'mindset': 0}
+        
+        all_insights = []
+        all_gaps = []
+        if analysis_history:
+            for analysis in analysis_history:
+                all_insights.extend(analysis.get("key_insights", []))
+                all_gaps.extend(analysis.get("gaps", []))
+
+        fallback_report = generate_fallback_report(
+            role_name=data.get("role_name", "Specialist"),
+            experience=data.get("experience", "Middle"),
+            scores=scores,
+            insights=all_insights,
+            gaps=all_gaps
+        )
         await message.answer(f"Не удалось сгенерировать полный отчет, но вот твои баллы:\n\n{fallback_report}")
         await state.clear()
 
