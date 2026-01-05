@@ -38,7 +38,12 @@ async def send_pdf_reports(session_ids: list[int]):
     from src.db.models import DiagnosticSession
     
     print("Importing PDF generator...", flush=True)
-    from src.utils.pdf_generator import generate_pdf_report
+    try:
+        from src.utils.pdf_generator import generate_pdf_report
+        print("PDF generator imported.", flush=True)
+    except Exception as e:
+        print(f"Failed to import PDF generator: {e}", flush=True)
+        return
     
     print("Importing Analytics...", flush=True)
     from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores, METRIC_NAMES_RU
