@@ -695,11 +695,8 @@ async def show_pricing_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "show_balance")
-async def show_balance_callback(callback: CallbackQuery):
-    """Показать баланс по callback."""
-    user_id = callback.from_user.id
-    
+async def send_balance_info(user_id: int, message: Message, is_edit: bool = False):
+    """Отправить или обновить информацию о балансе."""
     async with get_session() as session:
         balance = await balance_repo.get_user_balance(session, user_id)
         payments = await balance_repo.get_user_payments(session, user_id)
@@ -715,43 +712,6 @@ async def show_balance_callback(callback: CallbackQuery):
 📈 Пройдено всего: {balance.total_used}
 💰 Куплено всего: {balance.total_purchased}"""
 
-    if payments:
-        text += "\n\n━━━━━━━━━━━━━━━━━━━━\n📜 <b>Последние покупки:</b>\n"
-        for p in payments[:5]:
-            if p.status == "success":
-                date = p.completed_at.strftime("%d.%m.%Y") if p.completed_at else "—"
-                promo = " 🎁" if p.discount_amount > 0 else ""
-                text += f"\n{date} — {PACK_NAMES[p.pack_type]} — {format_price(p.final_amount)}{promo}"
-    
-    from src.bot.keyboards.inline import get_balance_keyboard
-    await callback.message.edit_text(text, reply_markup=get_balance_keyboard(count > 0))
-    await callback.answer()
-
-
-@router.message(Command("balance"))
-@router.message(F.text == "💳 Баланс")
-async def cmd_balance(message: Message):
-    """Показать баланс пользователя."""
-    user_id = message.from_user.id
-    
-    async with get_session() as session:
-        balance = await balance_repo.get_user_balance(session, user_id)
-        payments = await balance_repo.get_user_payments(session, user_id)
-    
-    # Формируем текст
-    count = balance.diagnostics_balance
-    count_word = "диагностика" if count == 1 else "диагностики" if 2 <= count <= 4 else "диагностик"
-    
-    demo_status = "✅ Использовано" if balance.demo_used else "🆓 Доступно"
-    
-    text = f"""📊 <b>ТВОЙ БАЛАНС</b>
-
-🎯 Доступно: <b>{count}</b> {count_word}
-🆓 Демо: {demo_status}
-📈 Пройдено всего: {balance.total_used}
-💰 Куплено всего: {balance.total_purchased}"""
-
-    # История покупок
     if payments:
         text += "\n\n━━━━━━━━━━━━━━━━━━━━\n📜 <b>Последние покупки:</b>\n"
         for p in payments[:5]:
@@ -763,5 +723,30 @@ async def cmd_balance(message: Message):
     text += "\n\n━━━━━━━━━━━━━━━━━━━━"
     
     from src.bot.keyboards.inline import get_balance_keyboard
-    await message.answer(text, reply_markup=get_balance_keyboard(count > 0))
+    keyboard = get_balance_keyboard(count > 0)
+
+    try:
+        if is_edit:
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Failed to send balance info: {e}")
+        # Fallback if edit fails
+        if is_edit:
+            await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "show_balance")
+async def show_balance_callback(callback: CallbackQuery):
+    """Показать баланс по callback."""
+    await send_balance_info(callback.from_user.id, callback.message, is_edit=True)
+    await callback.answer()
+
+
+@router.message(Command("balance"))
+@router.message(F.text == "💳 Баланс")
+async def cmd_balance(message: Message):
+    """Показать баланс пользователя."""
+    await send_balance_info(message.from_user.id, message, is_edit=False)
 

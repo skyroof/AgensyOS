@@ -44,7 +44,7 @@ def get_start_with_history_keyboard(has_completed: bool = False, best_score: int
     )
     # History button removed to avoid duplication with persistent menu
     builder.row(
-        InlineKeyboardButton(text="💳 Баланс / Купить", callback_data="buy_menu"),
+        InlineKeyboardButton(text="💳 Баланс / Купить", callback_data="show_balance"),
     )
     return builder.as_markup()
 
