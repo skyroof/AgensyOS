@@ -21,6 +21,10 @@ fi
 echo "🏗️ Building..."
 docker compose build --no-cache
 
+# 3.0 Stop containers to avoid conflicts
+echo "🛑 Stopping existing containers..."
+docker compose down --remove-orphans
+
 # 3.1 Run migrations (using run --rm to ensure DB is accessible even if bot fails)
 echo "🔄 Running migrations..."
 docker compose run --rm bot python scripts/migrate_mode_column.py
