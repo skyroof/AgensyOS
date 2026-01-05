@@ -18,6 +18,7 @@ if [ ! -f .env ]; then
 fi
 
 # 3. Build
+export COMPOSE_PARALLEL_LIMIT=1
 echo "🏗️ Building..."
 docker compose build
 
