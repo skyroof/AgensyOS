@@ -471,11 +471,11 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
             
             question = await generate_question(
                 role=data["role"],
+                role_name=data.get("role_name", "Специалист"),
                 experience=data["experience"],
                 question_number=1,
-                total_questions=total_questions,
-                history=[],
-                mode=diagnostic_mode
+                conversation_history=[],
+                analysis_history=[]
             )
         
         # Сохраняем вопрос
@@ -622,12 +622,12 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         
         next_q_num = current_q + 1
         next_question = await generate_question(
-            data["role"],
-            data["experience"],
-            next_q_num,
-            total_questions,
-            history,
-            mode=diagnostic_mode
+            role=data["role"],
+            role_name=data.get("role_name", "Специалист"), # Fallback если нет имени роли
+            experience=data["experience"],
+            question_number=next_q_num,
+            conversation_history=history,
+            analysis_history=analysis_history
         )
         
         # Обновляем стейт
