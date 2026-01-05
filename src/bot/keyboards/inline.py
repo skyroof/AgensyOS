@@ -315,7 +315,7 @@ def get_post_diagnostic_keyboard() -> InlineKeyboardMarkup:
     """
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="🚀 Создать PDP", callback_data="pdp_start"),
+        InlineKeyboardButton(text="🚀 Создать PDP", callback_data="pdp:create"),
     )
     builder.row(
         InlineKeyboardButton(text="🔄 Новая диагностика", callback_data="restart"),

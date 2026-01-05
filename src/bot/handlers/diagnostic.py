@@ -1426,32 +1426,41 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 
                 await thinking_msg.edit_text(summary_card, reply_markup=keyboard)
                 
-            # === ONE-TIME OFFER (OTO) ===
-            # Предлагаем скидку 30% на Pack 3 сразу после результата
+            # === ONE-TIME OFFER (OTO) & NEXT STEPS ===
+            # Объединяем OTO и PDP в одно сообщение, чтобы не спамить
             await asyncio.sleep(2)
-            await callback.message.answer(
-                "🔥 <b>Специальное предложение!</b>\n\n"
-                "Только сейчас: пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n\n"
-                "Обычная цена: <s>990₽</s>\n"
-                "<b>Твоя цена: 690₽</b>\n\n"
-                "<i>Предложение действует 15 минут.</i>",
-                reply_markup=get_oto_keyboard(),
-            )
             
-            # Добавляем подсказку про PDP, если он ещё не создан
-            await asyncio.sleep(1)
-            await callback.message.answer(
-                "🚀 <b>Что делать дальше?</b>\n\n"
+            combined_text = (
+                "🔥 <b>Специальное предложение!</b>\n"
+                "Пакет из 3-х диагностик для отслеживания прогресса со скидкой <b>30%</b>!\n"
+                "Обычная цена: <s>990₽</s> → <b>690₽</b>\n\n"
+                "🚀 <b>Твой план действий:</b>\n"
                 "1. Изучи детальный отчёт (кнопка выше)\n"
                 "2. Создай персональный план развития (PDP)\n"
-                "3. Отслеживай прогресс в /history\n\n"
-                "👇 <i>Используй меню внизу для навигации</i>",
-                reply_markup=get_post_diagnostic_keyboard()
+                "3. Отслеживай прогресс в /history"
             )
             
-            # Обновляем нижнее меню
+            # Собираем комбинированную клавиатуру на месте
+            from aiogram.utils.keyboard import InlineKeyboardBuilder
+            combined_builder = InlineKeyboardBuilder()
+            combined_builder.row(
+                InlineKeyboardButton(text="🔥 Забрать за 690₽", callback_data="oto_buy:pack3")
+            )
+            combined_builder.row(
+                InlineKeyboardButton(text="🚀 Создать PDP", callback_data="pdp:create")
+            )
+            combined_builder.row(
+                InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
+            )
+            
             await callback.message.answer(
-                "Меню обновлено:", 
+                combined_text,
+                reply_markup=combined_builder.as_markup()
+            )
+            
+            # Возвращаем нижнее меню (минималистично)
+            await callback.message.answer(
+                "👇 <i>Меню навигации внизу</i>", 
                 reply_markup=get_main_menu_reply_keyboard()
             )
         
