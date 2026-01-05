@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.db.session import get_session
+from src.db.session import get_session, init_db
 from src.db.models import DiagnosticSession, User, Answer
 from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores
 from src.ai.report_gen import generate_detailed_report, generate_fallback_report
@@ -38,6 +38,8 @@ async def recover_sessions():
     bot = Bot(token=bot_token)
     
     logger.info("🚀 Starting session recovery...")
+
+    await init_db()
     
     async with get_session() as session:
         # Find stuck sessions
