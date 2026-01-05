@@ -23,13 +23,14 @@ async def get_or_create_subscription(
 
 
 async def activate_subscription(
-    session: AsyncSession, user_id: int, days: int = 30
+    session: AsyncSession, user_id: int, days: int = 30, commit: bool = True
 ) -> UserSubscription:
     """
     Активировать или продлить подписку.
 
     Args:
         days: На сколько дней продлить
+        commit: Выполнять ли commit (default: True)
     """
     subscription = await get_or_create_subscription(session, user_id)
 
@@ -45,7 +46,10 @@ async def activate_subscription(
         subscription.end_date = now + timedelta(days=days)
 
     subscription.updated_at = now
-    await session.commit()
+    
+    if commit:
+        await session.commit()
+    
     return subscription
 
 

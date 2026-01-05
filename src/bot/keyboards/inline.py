@@ -482,3 +482,18 @@ def get_demo_result_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo"),
     )
     return builder.as_markup()
+
+
+def get_direct_payment_keyboard(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
+    """Клавиатура для прямой оплаты через ЮKassa."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="💳 Оплатить", url=payment_url)
+    )
+    builder.row(
+        InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment:{payment_id}")
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Отмена", callback_data="buy_menu")
+    )
+    return builder.as_markup()

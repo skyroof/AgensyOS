@@ -37,7 +37,9 @@ from src.bot.keyboards.inline import (
     get_promo_input_keyboard,
     get_after_payment_keyboard,
     get_paywall_keyboard,
+    get_direct_payment_keyboard,
 )
+from src.services.yookassa_service import yookassa_service
 
 
 logger = logging.getLogger(__name__)
@@ -300,33 +302,59 @@ async def process_purchase(
             await callback.answer("🎁 Промокод применён!")
             return
         
-        # Отправляем invoice для оплаты
-        try:
-            await send_invoice(
-                bot=callback.bot,
-                chat_id=callback.message.chat.id,
-                pack_type=pack_type,
-                payment_id=payment.id,
-                final_price=payment.final_amount,
-                user_id=user_id,
-                promocode=promo_code,
-            )
-            await callback.answer()
-            
-            # Удаляем сообщение с тарифами (если это обычное меню)
-            # Для OTO не удаляем, пусть висит пока пользователь думает
-            if not override_price:
-                try:
-                    await callback.message.delete()
-                except Exception:
-                    pass
+        # Выбор метода оплаты
+        settings = get_settings()
+
+        # 1. Telegram Payments (Native)
+        if settings.payment_provider_token:
+            try:
+                # Send invoice via Telegram
+                await send_invoice(
+                    bot=callback.bot,
+                    chat_id=callback.message.chat.id,
+                    pack_type=pack_type,
+                    payment_id=payment.id,
+                    final_price=payment.final_amount,
+                    user_id=internal_user_id,
+                    promocode=promo_code if promo else None
+                )
+                await callback.answer()
+            except ValueError as e:
+                # If provider token is missing
+                await callback.answer("Ошибка настройки платежей. Обратитесь к администратору.", show_alert=True)
+                logger.error(f"Payment config error: {e}")
+
+        # 2. YooKassa Direct API
+        elif settings.yookassa_shop_id:
+            try:
+                amount_rub = payment.final_amount / 100.0
+                desc = f"{PACK_NAMES[pack_type]} (User {user_id})"
                 
-        except ValueError as e:
-            logger.error(f"Payment error: {e}")
-            await callback.answer(
-                "⚠️ Платежи временно недоступны. Попробуй позже.",
-                show_alert=True
-            )
+                url, yoo_payment_id = yookassa_service.create_payment(
+                    amount=amount_rub,
+                    description=desc,
+                    metadata={"payment_id": payment.id, "user_id": user_id}
+                )
+                
+                # Сохраняем ID платежа ЮKassa
+                payment.provider_payment_charge_id = yoo_payment_id
+                await session.commit()
+                
+                await callback.message.edit_text(
+                    f"💳 <b>Оплата заказа</b>\n\n"
+                    f"📦 Пакет: {PACK_NAMES[pack_type]}\n"
+                    f"💰 Сумма: <b>{amount_rub:.0f} ₽</b>\n\n"
+                    f"Нажмите кнопку ниже для перехода к оплате:",
+                    reply_markup=get_direct_payment_keyboard(url, yoo_payment_id)
+                )
+                await callback.answer()
+                
+            except Exception as e:
+                logger.error(f"YooKassa API error: {e}")
+                await callback.answer("Ошибка создания платежа через ЮKassa", show_alert=True)
+        
+        else:
+            await callback.answer("Платежи не настроены. Обратитесь к администратору.", show_alert=True)
 
 
 # ==================== PROMOCODE ====================
@@ -759,4 +787,63 @@ async def show_balance_callback(callback: CallbackQuery):
 async def cmd_balance(message: Message):
     """Показать баланс пользователя."""
     await send_balance_info(message.from_user, message, is_edit=False)
+
+
+@router.callback_query(F.data.startswith("check_payment:"))
+async def check_payment_callback(callback: CallbackQuery, state: FSMContext):
+    """Проверка статуса платежа (Direct API)."""
+    yoo_payment_id = callback.data.split(":")[1]
+    
+    status = yookassa_service.check_payment(yoo_payment_id)
+    
+    if status == "succeeded":
+        async with get_session() as session:
+            from sqlalchemy import select
+            from src.db.models import Payment
+            
+            result = await session.execute(
+                select(Payment).where(Payment.provider_payment_charge_id == yoo_payment_id)
+            )
+            payment = result.scalar_one_or_none()
+            
+            if not payment:
+                await callback.answer("Платеж не найден в БД", show_alert=True)
+                return
+                
+            if payment.status == "success":
+                await callback.answer("Уже оплачено!")
+                return
+            
+            # Обновляем статус
+            payment.status = "success"
+            payment.completed_at = datetime.utcnow()
+            
+            internal_user_id = payment.user_id
+            
+            # Активируем подписку или начисляем диагностики
+            if payment.pack_type == "subscription_1m":
+                 await activate_subscription(session, internal_user_id, days=30, commit=False)
+            else:
+                 # Для пакетов диагностик
+                 await balance_repo.add_diagnostics(
+                    session, internal_user_id, payment.diagnostics_count, payment.id, commit=False
+                 )
+            
+            await session.commit()
+            
+            await callback.message.edit_text(
+                f"🎉 <b>Оплата прошла успешно!</b>\n\n"
+                f"💰 Сумма: {payment.final_amount / 100:.0f}₽\n"
+                f"🎯 Добавлено: {payment.diagnostics_count} диагностик\n\n"
+                f"Готов узнать свой реальный уровень?",
+                reply_markup=get_after_payment_keyboard()
+            )
+            
+    elif status == "canceled":
+        await callback.answer("Платеж отменен", show_alert=True)
+        await callback.message.delete()
+    elif status == "pending":
+        await callback.answer("Оплата еще не поступила. Попробуйте через минуту.", show_alert=True)
+    else:
+        await callback.answer(f"Статус: {status}", show_alert=True)
 

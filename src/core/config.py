@@ -55,6 +55,10 @@ class Settings(BaseSettings):
         default="",
         description="Payment provider token from @BotFather"
     )
+
+    # YooKassa API
+    yookassa_shop_id: str | None = Field(default=None, description="YooKassa Shop ID")
+    yookassa_secret_key: str | None = Field(default=None, description="YooKassa Secret Key")
     
     # Pricing (in kopecks/cents)
     price_single: int = Field(default=39000, description="Price for 1 diagnostic in kopecks")
