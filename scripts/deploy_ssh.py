@@ -38,6 +38,7 @@ def deploy():
         commands = [
             "cd /root/bot",
             "docker compose down --remove-orphans || true", 
+            "docker rm -f diagnostic-redis diagnostic-db diagnostic-bot || true",
             "git reset --hard", 
             "git pull",
             "chmod +x deploy.sh",
