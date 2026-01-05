@@ -2,40 +2,37 @@ import asyncio
 import logging
 import os
 import sys
-print("Script started", flush=True)
 from datetime import datetime
-
-print("Importing aiogram...", flush=True)
-from aiogram import Bot
-print("Importing sqlalchemy...", flush=True)
-from sqlalchemy import select, and_
-from sqlalchemy.orm import selectinload
-print("Importing dotenv...", flush=True)
-from dotenv import load_dotenv
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-print("Importing src modules...", flush=True)
-from src.db.session import get_session, init_db
-from src.db.models import DiagnosticSession, User, Answer
-from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores
-from src.ai.report_gen import generate_detailed_report, generate_fallback_report
-from src.bot.handlers.diagnostic import generate_final_achievements
-from src.utils.message_splitter import send_long_message
-from src.bot.keyboards.inline import get_post_diagnostic_keyboard
-from src.db.repositories.diagnostic_repo import complete_session
-print("Imports done.", flush=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
 async def recover_sessions():
-    """Восстановить прерванные сессии и отправить отчеты."""
+    print("Inside recover_sessions...", flush=True)
     
+    print("Importing modules...", flush=True)
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    from aiogram import Bot
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    from src.db.session import get_session, init_db
+    from src.db.models import DiagnosticSession
+    from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores
+    from src.ai.report_gen import generate_detailed_report, generate_fallback_report
+    from src.bot.keyboards.inline import get_post_diagnostic_keyboard
+    from src.db.repositories.diagnostic_repo import complete_session
+    from src.bot.handlers.diagnostic import achievements
+    from src.ai.report_gen import split_message
+    
+    print("Modules imported.", flush=True)
+
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token:
         logger.error("BOT_TOKEN not found")
@@ -43,7 +40,6 @@ async def recover_sessions():
 
     bot = Bot(token=bot_token)
     
-    print("🚀 Starting session recovery...", flush=True)
     logger.info("🚀 Starting session recovery...")
 
     print("Initializing DB...", flush=True)
@@ -52,7 +48,6 @@ async def recover_sessions():
     
     async with get_session() as session:
         # Find stuck sessions
-        # Logic: in_progress, created recently (e.g., last 24h), and has answers
         stmt = (
             select(DiagnosticSession)
             .options(
@@ -61,7 +56,6 @@ async def recover_sessions():
             )
             .where(DiagnosticSession.status == "in_progress")
             .where(DiagnosticSession.completed_at.is_(None))
-            # We assume if they have >= 10 answers (or near that), they finished but crashed
         )
         
         result = await session.execute(stmt)
@@ -96,22 +90,11 @@ async def recover_sessions():
                     if ans.analysis:
                         analysis_history.append(ans.analysis)
                 
-                # If analysis is missing in answers (shouldn't happen if they passed), try session
-                if not analysis_history and ds.analysis_history:
-                    if isinstance(ds.analysis_history, list):
-                        analysis_history = ds.analysis_history
-                
-                if not analysis_history:
-                    logger.warning(f"No analysis history for session {ds.id}. Skipping.")
-                    continue
-
                 # Calculate scores
                 scores = calculate_category_scores(analysis_history)
                 scores = calibrate_scores(scores, ds.experience)
                 
                 # Generate report
-                logger.info(f"Generating report for session {ds.id}...")
-                
                 try:
                     report_text = await generate_detailed_report(
                         role=ds.role,
@@ -128,7 +111,7 @@ async def recover_sessions():
                     for analysis in analysis_history:
                         all_insights.extend(analysis.get("key_insights", []))
                         all_gaps.extend(analysis.get("gaps", []))
-                        
+                    
                     report_text = generate_fallback_report(
                         role_name=ds.role_name,
                         experience=ds.experience,
@@ -136,7 +119,7 @@ async def recover_sessions():
                         insights=all_insights,
                         gaps=all_gaps
                     )
-
+                
                 # Save to DB
                 await complete_session(
                     session,
@@ -150,14 +133,6 @@ async def recover_sessions():
                 
                 # Send to user
                 user_id = ds.user.telegram_id
-                
-                # Achievements
-                # Need dummy answer_stats or reconstruct from DB?
-                # DB doesn't store duration per answer easily unless we diff created_at
-                # Let's mock it or skip achievements logic reliant on time
-                answer_stats = [] # Passed as empty, achievements will be minimal
-                
-                achievements = generate_final_achievements(answer_stats)
                 
                 summary = (
                     f"✅ <b>Твой результат готов!</b>\n"
@@ -173,16 +148,11 @@ async def recover_sessions():
                     await bot.send_message(user_id, summary)
                     
                     # Split and send report
-                    # We can use send_long_message but it requires 'message' object usually?
-                    # No, send_long_message takes 'message' object to call .answer()
-                    # We need to manually split and send via bot.send_message
-                    
-                    from src.ai.report_gen import split_message
                     parts = split_message(report_text)
                     
                     for part in parts:
                         await bot.send_message(user_id, part)
-                        
+                    
                     # Post diagnostic keyboard
                     await bot.send_message(
                         user_id,
@@ -198,7 +168,7 @@ async def recover_sessions():
             
             except Exception as e:
                 logger.error(f"Error processing session {ds.id}: {e}", exc_info=True)
-                
+        
         logger.info(f"Recovery finished. Recovered {recovered_count} sessions.")
         await bot.session.close()
 
