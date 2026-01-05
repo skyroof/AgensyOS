@@ -23,7 +23,7 @@ async def send_telegram_document(bot_token: str, chat_id: int, document_bytes: b
             else:
                 print(f"Document sent to {chat_id}")
 
-async def send_pdf_reports(session_ids: list[int]):
+async def send_pdf_reports(session_ids: list[int], target_id: int = None):
     print("Importing modules...", flush=True)
     from dotenv import load_dotenv
     load_dotenv()
@@ -133,8 +133,8 @@ async def send_pdf_reports(session_ids: list[int]):
                     conversation_history=conversation_history,
                     user_name=user_name,
                     profile_data=profile_data,
-                    pdp_data=None, # PDP generation might be complex to replicate here quickly, skipping for now as it's optional
-                    benchmark_data=None, # Benchmark generation might be complex to replicate here quickly, skipping for now as it's optional
+                    pdp_data=None, 
+                    benchmark_data=None,
                     raw_averages=raw_averages,
                 )
                 
@@ -142,7 +142,13 @@ async def send_pdf_reports(session_ids: list[int]):
                 filename = f"diagnostic_{s.role}_{date_str}.pdf"
                 
                 print(f"Sending PDF ({len(pdf_bytes)} bytes)...", flush=True)
-                await send_telegram_document(bot_token, s.user.telegram_id, pdf_bytes, filename, caption="Ваш PDF отчет")
+                
+                recipient_id = target_id if target_id else s.user.telegram_id
+                if target_id:
+                    print(f"REDIRECTING to {target_id} (original: {s.user.telegram_id})")
+                
+                await send_telegram_document(bot_token, recipient_id, pdf_bytes, filename, caption="Ваш PDF отчет")
+                print(f"Document sent to {recipient_id}")
                 print(f"Done for session {session_id}")
                 
             except Exception as e:
@@ -157,16 +163,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Monkey patch send_telegram_document to redirect if target_id is set
-    original_send = send_telegram_document
-    
-    if args.target_id:
-        print(f"REDIRECTING ALL REPORTS TO: {args.target_id}")
-        async def redirected_send(bot_token, chat_id, document_bytes, filename, caption=""):
-            await original_send(bot_token, args.target_id, document_bytes, filename, caption)
-        send_telegram_document = redirected_send
-    
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         
-    asyncio.run(send_pdf_reports(args.session_ids))
+    asyncio.run(send_pdf_reports(args.session_ids, args.target_id))

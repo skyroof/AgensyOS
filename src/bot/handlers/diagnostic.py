@@ -10,6 +10,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramBadRequest
 
 from src.bot.states import DiagnosticStates
 from src.bot.keyboards.inline import (
@@ -329,6 +330,12 @@ async def cancel_reminder(user_id: int, session_id: int):
 @router.callback_query(F.data == "start_diagnostic")
 async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Начало диагностики — первый вопрос."""
+    # Prevent double clicks
+    current_state = await state.get_state()
+    if current_state == DiagnosticStates.starting:
+        await callback.answer()
+        return
+
     # Сразу меняем состояние, чтобы избежать двойного клика
     # Но сначала проверим данные!
     data = await state.get_data()
@@ -439,17 +446,23 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         
         if cached_question:
             # Кэш найден — показываем быструю анимацию
-            loading_msg = await callback.message.edit_text(
-                "🚀 <b>Запускаю диагностику...</b>"
-            )
+            try:
+                loading_msg = await callback.message.edit_text(
+                    "🚀 <b>Запускаю диагностику...</b>"
+                )
+            except TelegramBadRequest:
+                return
             await asyncio.sleep(0.5)  # Минимальная задержка для UX
             question = cached_question
             logger.info(f"Using cached first question for {data['role']}/{data['experience']}")
         else:
             # Кэш не найден — генерируем через AI с анимацией
-            loading_msg = await callback.message.edit_text(
-                "🧠 <b>Подготавливаю диагностику...</b>\n\n<code>░░░░░░░░░░</code> 0%"
-            )
+            try:
+                loading_msg = await callback.message.edit_text(
+                    "🧠 <b>Подготавливаю диагностику...</b>\n\n<code>░░░░░░░░░░</code> 0%"
+                )
+            except TelegramBadRequest:
+                return
             
             async def animate_first_question():
                 states = [
@@ -535,7 +548,11 @@ async def handle_answer(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(DiagnosticStates.confirming_answer, F.data == "confirm_answer")
 async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение ответа — переход к следующему вопросу."""
-    await callback.message.edit_reply_markup(reply_markup=None)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        logger.warning(f"Double click on confirm_answer by {callback.from_user.id}")
+        return
     
     # Показываем "Анализирую..."
     processing_msg = await callback.message.answer("🤔 Анализирую ответ...")

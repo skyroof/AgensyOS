@@ -436,9 +436,20 @@ async def handle_promo_input(message: Message, state: FSMContext):
     # ====================================================================
 
     async with get_session() as session:
+        # 0. Гарантируем, что пользователь существует и получаем его внутренний ID
+        from src.db.repositories.user_repo import get_or_create_user
+        user = await get_or_create_user(
+            session, 
+            telegram_id=user_id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name
+        )
+        internal_user_id = user.id
+
         # Пробуем валидировать для single (проверим общую валидность)
         valid, error, promo = await balance_repo.validate_promocode(
-            session, code, "single", user_id
+            session, code, "single", internal_user_id
         )
         
         if not valid:
