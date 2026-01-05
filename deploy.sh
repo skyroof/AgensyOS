@@ -41,5 +41,6 @@ echo "🧹 Cleaning up..."
 docker image prune -f
 
 echo "✅ Deployment completed successfully!"
-echo "📜 Logs:"
-docker compose logs -f --tail=50 bot
+echo "📜 Logs (last 50 lines):"
+sleep 5
+docker compose logs --tail=50 bot
