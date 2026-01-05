@@ -4,7 +4,7 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -462,10 +462,10 @@ async def get_pdp_stats(
 
     # Считаем задачи
     total = await session.scalar(
-        select(select(PdpTask).where(PdpTask.plan_id == plan_id).count())
+        select(func.count()).select_from(PdpTask).where(PdpTask.plan_id == plan_id)
     )
     completed = await session.scalar(
-        select(select(PdpTask).where(PdpTask.plan_id == plan_id).where(PdpTask.status == "completed").count())
+        select(func.count()).select_from(PdpTask).where(PdpTask.plan_id == plan_id, PdpTask.status == "completed")
     )
 
     return {
