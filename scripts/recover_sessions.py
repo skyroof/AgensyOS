@@ -7,8 +7,10 @@ from datetime import datetime
 
 print("Importing aiogram...", flush=True)
 from aiogram import Bot
+print("Importing sqlalchemy...", flush=True)
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
+print("Importing dotenv...", flush=True)
 from dotenv import load_dotenv
 
 # Add project root to path
