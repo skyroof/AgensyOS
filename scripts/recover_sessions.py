@@ -19,7 +19,7 @@ from src.ai.report_gen import generate_detailed_report, generate_fallback_report
 from src.bot.handlers.diagnostic import generate_final_achievements
 from src.utils.message_splitter import send_long_message
 from src.bot.keyboards.inline import get_post_diagnostic_keyboard
-from src.db.repositories.session_repo import complete_session
+from src.db.repositories.diagnostic_repo import complete_session
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
