@@ -33,9 +33,14 @@ async def send_pdf_reports(session_ids: list[int]):
         print("BOT_TOKEN not found")
         return
 
+    print("Importing DB...", flush=True)
     from src.db.session import get_session, init_db
     from src.db.models import DiagnosticSession
+    
+    print("Importing PDF generator...", flush=True)
     from src.utils.pdf_generator import generate_pdf_report
+    
+    print("Importing Analytics...", flush=True)
     from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores, METRIC_NAMES_RU
     from src.analytics import build_profile
     from sqlalchemy import select
