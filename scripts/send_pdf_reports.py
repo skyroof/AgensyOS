@@ -149,13 +149,24 @@ async def send_pdf_reports(session_ids: list[int]):
                 print(f"Error generating/sending PDF for session {session_id}: {e}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python send_pdf_reports.py session_id1 session_id2 ...")
-        sys.exit(1)
+    import argparse
     
-    session_ids = [int(x) for x in sys.argv[1:]]
+    parser = argparse.ArgumentParser(description="Send PDF reports for specific sessions")
+    parser.add_argument("session_ids", nargs="+", type=int, help="List of session IDs")
+    parser.add_argument("--target-id", type=int, help="Optional Telegram ID to send reports to (instead of the user)", default=None)
+    
+    args = parser.parse_args()
+    
+    # Monkey patch send_telegram_document to redirect if target_id is set
+    original_send = send_telegram_document
+    
+    if args.target_id:
+        print(f"REDIRECTING ALL REPORTS TO: {args.target_id}")
+        async def redirected_send(bot_token, chat_id, document_bytes, filename, caption=""):
+            await original_send(bot_token, args.target_id, document_bytes, filename, caption)
+        send_telegram_document = redirected_send
     
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         
-    asyncio.run(send_pdf_reports(session_ids))
+    asyncio.run(send_pdf_reports(args.session_ids))
