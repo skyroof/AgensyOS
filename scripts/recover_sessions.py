@@ -5,6 +5,7 @@ import sys
 print("Script started", flush=True)
 from datetime import datetime
 
+print("Importing aiogram...", flush=True)
 from aiogram import Bot
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+print("Importing src modules...", flush=True)
 from src.db.session import get_session, init_db
 from src.db.models import DiagnosticSession, User, Answer
 from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores
@@ -21,6 +23,7 @@ from src.bot.handlers.diagnostic import generate_final_achievements
 from src.utils.message_splitter import send_long_message
 from src.bot.keyboards.inline import get_post_diagnostic_keyboard
 from src.db.repositories.diagnostic_repo import complete_session
+print("Imports done.", flush=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -198,4 +201,5 @@ async def recover_sessions():
         await bot.session.close()
 
 if __name__ == "__main__":
+    print("Running main...", flush=True)
     asyncio.run(recover_sessions())
