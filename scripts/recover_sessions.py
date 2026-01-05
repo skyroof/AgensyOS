@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+print("Script started", flush=True)
 from datetime import datetime
 
 from aiogram import Bot
