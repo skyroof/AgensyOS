@@ -716,7 +716,7 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
                 and len(conversation_history) >= current_question - 1
             ):
                 # Если есть история — генерируем следующий вопрос
-                from src.ai.client import generate_question
+                from src.ai.question_gen import generate_question
 
                 await callback.message.edit_text("🔄 Восстанавливаю сессию...")
 
@@ -738,7 +738,7 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
                 )
             else:
                 # Нет истории — генерируем первый вопрос
-                from src.ai.client import generate_question
+                from src.ai.question_gen import generate_question
 
                 await callback.message.edit_text("🔄 Восстанавливаю сессию...")
 
