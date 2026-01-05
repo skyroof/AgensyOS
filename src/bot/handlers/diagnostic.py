@@ -657,6 +657,20 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.message.answer("Произошла ошибка. Попробуй ответить еще раз.")
 
 
+@router.callback_query(F.data == "pause_session")
+async def pause_session(callback: CallbackQuery, state: FSMContext):
+    """Приостановка диагностики."""
+    await callback.message.edit_reply_markup(reply_markup=None)
+    
+    await callback.message.answer(
+        "⏸️ <b>Диагностика приостановлена.</b>\n\n"
+        "Мы сохранили твой прогресс. Когда будешь готов продолжить — просто нажми /start или выбери «Продолжить» в меню."
+    )
+    
+    # Сбрасываем стейт, но данные в БД остаются
+    await state.clear()
+
+
 @router.callback_query(DiagnosticStates.confirming_answer, F.data == "edit_answer")
 async def edit_answer(callback: CallbackQuery, state: FSMContext):
     """Редактирование ответа (просто просим ввести заново)."""
