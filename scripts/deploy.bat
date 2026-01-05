@@ -31,7 +31,7 @@ echo [3/4] Pushing to GitHub...
 git push origin main
 
 echo [4/4] Deploying to server...
-ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=10 root@89.169.47.138 "cd /root/bot && git pull && chmod +x deploy.sh && ./deploy.sh"
+python scripts/deploy_ssh.py
 
 echo.
 echo ✅ Deploy complete!
