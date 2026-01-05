@@ -1,0 +1,3 @@
+✅ Test Case 3 passed (no crash on finish)
+   Messages sent (answer): 3
+   Messages edited: 1
