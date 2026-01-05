@@ -24,6 +24,7 @@ docker compose build --no-cache
 # 3.0 Stop containers to avoid conflicts
 echo "🛑 Stopping existing containers..."
 docker compose down --remove-orphans
+docker rm -f diagnostic-redis diagnostic-db diagnostic-bot || true
 
 # 3.1 Run migrations (using run --rm to ensure DB is accessible even if bot fails)
 echo "🔄 Running migrations..."
