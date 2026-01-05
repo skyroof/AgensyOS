@@ -511,7 +511,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         await callback.answer("Ошибка запуска", show_alert=True)
 
 
-MIN_ANSWER_LENGTH = 50  # Минимальная длина ответа (для точной оценки)
+MIN_ANSWER_LENGTH = 2  # Минимальная длина ответа (для точной оценки)
 MAX_ANSWER_LENGTH = 4000  # Максимальная длина (TG лимит 4096, с запасом)
 
 
