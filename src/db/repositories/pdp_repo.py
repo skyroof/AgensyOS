@@ -479,6 +479,7 @@ async def get_pdp_stats(
         "completion_rate": int(completed / total * 100) if total > 0 else 0,
         "current_week": plan.current_week,
         "current_streak": plan.current_streak,
+        "best_streak": plan.best_streak,
         "total_points": plan.total_points,
         "badges_count": len(plan.badges) if plan.badges else 0,
     }
