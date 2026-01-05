@@ -66,7 +66,8 @@ async def recover_sessions():
     async with get_session() as session:
         # Find stuck sessions (in_progress, has answers)
         stmt = select(DiagnosticSession).options(
-            selectinload(DiagnosticSession.answers)
+            selectinload(DiagnosticSession.answers),
+            selectinload(DiagnosticSession.user)
         ).where(
             DiagnosticSession.status == "in_progress"
         )
@@ -86,7 +87,12 @@ async def recover_sessions():
                  logger.info(f"Session {s.id} has only {len(s.answers)} answers. Skipping.")
                  continue
 
-            logger.info(f"Recovering session {s.id} for user {s.user_id}...")
+            if not s.user:
+                logger.warning(f"Session {s.id} has no user associated. Skipping.")
+                continue
+
+            telegram_id = s.user.telegram_id
+            logger.info(f"Recovering session {s.id} for user {telegram_id} (internal ID {s.user_id})...")
             
             try:
                 # 1. Reconstruct history
@@ -97,7 +103,12 @@ async def recover_sessions():
                 sorted_answers = sorted(s.answers, key=lambda a: a.id)
                 
                 for a in sorted_answers:
-                    history.append({"role": "user", "content": a.answer_text})
+                    history.append({
+                        "role": "user", 
+                        "content": a.answer_text,
+                        "question": a.question_text,
+                        "answer": a.answer_text
+                    })
                     if a.analysis:
                         try:
                             # a.analysis is typically a dict if using JSON field
@@ -154,14 +165,14 @@ async def recover_sessions():
                     f"👇 Твой подробный отчет ниже"
                 )
                 
-                await send_telegram_message(bot_token, s.user_id, summary)
+                await send_telegram_message(bot_token, telegram_id, summary)
                 
                 parts = split_message(report_text)
                 for part in parts:
-                    await send_telegram_message(bot_token, s.user_id, part)
+                    await send_telegram_message(bot_token, telegram_id, part)
                     await asyncio.sleep(0.5)
                 
-                logger.info(f"Report sent to user {s.user_id}.")
+                logger.info(f"Report sent to user {telegram_id}.")
                 
             except Exception as e:
                 logger.error(f"Error recovering session {s.id}: {e}", exc_info=True)
