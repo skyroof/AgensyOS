@@ -16,7 +16,7 @@ from aiogram.types import (
     PreCheckoutQuery,
     User,
 )
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 
 from src.db.session import get_session
@@ -376,13 +376,9 @@ async def enter_promo_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(F.text, F.func(lambda m: len(m.text) <= 50))
+@router.message(F.text, F.func(lambda m: len(m.text) <= 50), StateFilter("waiting_promo"))
 async def handle_promo_input(message: Message, state: FSMContext):
     """Обработка ввода промокода."""
-    current_state = await state.get_state()
-    if current_state != "waiting_promo":
-        return  # Не в режиме ввода промокода
-    
     code = message.text.upper().strip()
     user_id = message.from_user.id
     
