@@ -34,8 +34,11 @@ def deploy():
         print("✅ Connected!")
         
         # Commands to run
+        # Force stop containers first to avoid conflicts, then pull and deploy
         commands = [
             "cd /root/bot",
+            "docker compose down --remove-orphans || true", 
+            "git reset --hard", 
             "git pull",
             "chmod +x deploy.sh",
             "./deploy.sh"
