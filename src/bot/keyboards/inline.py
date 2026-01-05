@@ -96,12 +96,16 @@ def get_report_keyboard(session_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_question_keyboard() -> InlineKeyboardMarkup:
+def get_question_keyboard(show_skip: bool = False) -> InlineKeyboardMarkup:
     """Клавиатура под вопросом (пауза, контекст)."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="⏸️ Сделать паузу", callback_data="pause_session"),
     )
+    if show_skip:
+        builder.row(
+            InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_question"),
+        )
     return builder.as_markup()
 
 
