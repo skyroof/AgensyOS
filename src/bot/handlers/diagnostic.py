@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 # Количество вопросов в зависимости от режима
 FULL_QUESTIONS = 10
-DEMO_QUESTIONS = 5
+DEMO_QUESTIONS = 10
 # REMINDER_TIMEOUT удален, так как теперь через БД (5 минут по дефолту)
 
 def get_total_questions(mode: str) -> int:
@@ -489,7 +489,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         await state.update_data(current_question_text=question)
         
         # Для демо показываем другой текст
-        demo_note = "\n\n<i>🎁 Демо-версия: 3 вопроса</i>" if diagnostic_mode == "demo" else ""
+        demo_note = ""
         
         await callback.message.edit_text(
             f"<b>Вопрос 1/{total_questions}</b>\n\n{question}{demo_note}",
