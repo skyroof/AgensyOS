@@ -37,9 +37,12 @@ async def recover_sessions():
 
     bot = Bot(token=bot_token)
     
+    print("🚀 Starting session recovery...", flush=True)
     logger.info("🚀 Starting session recovery...")
 
+    print("Initializing DB...", flush=True)
     await init_db()
+    print("DB Initialized.", flush=True)
     
     async with get_session() as session:
         # Find stuck sessions
