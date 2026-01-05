@@ -467,10 +467,15 @@ async def get_pdp_stats(
     completed = await session.scalar(
         select(func.count()).select_from(PdpTask).where(PdpTask.plan_id == plan_id, PdpTask.status == "completed")
     )
+    skipped = await session.scalar(
+        select(func.count()).select_from(PdpTask).where(PdpTask.plan_id == plan_id, PdpTask.status == "skipped")
+    )
 
     return {
         "total_tasks": total,
         "completed_tasks": completed,
+        "skipped_tasks": skipped,
+        "pending_tasks": total - completed - skipped,
         "completion_rate": int(completed / total * 100) if total > 0 else 0,
         "current_week": plan.current_week,
         "current_streak": plan.current_streak,
