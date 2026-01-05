@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-def deploy():
+def check_status():
     # Configuration
     host = os.getenv("SSH_HOST", "89.169.47.138")
     user = os.getenv("SSH_USER", "root")
@@ -14,7 +14,6 @@ def deploy():
     
     if not password:
         print("❌ Error: SSH_PASSWORD not found in .env file")
-        print("Please add SSH_PASSWORD=your_password_here to .env")
         sys.exit(1)
 
     print(f"🚀 Connecting to {user}@{host}...")
@@ -29,23 +28,17 @@ def deploy():
             hostname=host,
             username=user,
             password=password,
-            timeout=60
+            timeout=30
         )
-        
-        # Enable keepalive to prevent connection drop during long build
-        transport = client.get_transport()
-        transport.set_keepalive(30)
-        
         print("✅ Connected!")
         
-        # Commands to run
-        # Use deploy.sh for all logic
+        # Commands to check status
         commands = [
             "cd /root/bot",
-            "git reset --hard", 
-            "git pull",
-            "chmod +x deploy.sh",
-            "./deploy.sh"
+            "echo '=== CURRENT COMMIT ==='",
+            "git log -1 --oneline",
+            "echo '=== DOCKER CONTAINERS ==='",
+            "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'"
         ]
         
         full_command = " && ".join(commands)
@@ -63,16 +56,16 @@ def deploy():
         exit_status = stdout.channel.recv_exit_status()
         
         if exit_status == 0:
-            print("\n✅ Deploy completed successfully!")
+            print("\n✅ Status check completed!")
         else:
-            print(f"\n❌ Deploy failed with exit code {exit_status}")
+            print(f"\n❌ Status check failed with exit code {exit_status}")
             sys.exit(exit_status)
             
     except Exception as e:
-        print(f"\n❌ Error during deployment: {e}")
+        print(f"\n❌ Error during status check: {e}")
         sys.exit(1)
     finally:
         client.close()
 
 if __name__ == "__main__":
-    deploy()
+    check_status()

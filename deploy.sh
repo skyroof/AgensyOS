@@ -19,7 +19,7 @@ fi
 
 # 3. Build
 echo "🏗️ Building..."
-docker compose build --no-cache
+docker compose build
 
 # 3.0 Stop containers to avoid conflicts
 echo "🛑 Stopping existing containers..."
