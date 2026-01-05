@@ -46,8 +46,15 @@ async def send_pdf_reports(session_ids: list[int]):
         return
     
     print("Importing Analytics...", flush=True)
-    from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores, METRIC_NAMES_RU
-    from src.analytics import build_profile
+    try:
+        from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores, METRIC_NAMES_RU
+        print("Answer analyzer imported.", flush=True)
+        from src.analytics import build_profile
+        print("Analytics imported.", flush=True)
+    except Exception as e:
+        print(f"Failed to import Analytics: {e}", flush=True)
+        return
+
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
     
