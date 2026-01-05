@@ -14,12 +14,13 @@ from aiogram.types import (
     Message, 
     CallbackQuery, 
     PreCheckoutQuery,
+    User,
 )
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
 from src.db.session import get_session
-from src.db.repositories import balance_repo
+from src.db.repositories import balance_repo, get_or_create_user
 from src.payments.telegram_payments import (
     send_invoice,
     parse_invoice_payload,
@@ -695,11 +696,20 @@ async def show_pricing_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def send_balance_info(user_id: int, message: Message, is_edit: bool = False):
+async def send_balance_info(tg_user: User, message: Message, is_edit: bool = False):
     """Отправить или обновить информацию о балансе."""
     async with get_session() as session:
-        balance = await balance_repo.get_user_balance(session, user_id)
-        payments = await balance_repo.get_user_payments(session, user_id)
+        # Ensure user exists
+        await get_or_create_user(
+            session, 
+            tg_user.id, 
+            tg_user.username, 
+            tg_user.first_name, 
+            tg_user.last_name
+        )
+        
+        balance = await balance_repo.get_user_balance(session, tg_user.id)
+        payments = await balance_repo.get_user_payments(session, tg_user.id)
     
     count = balance.diagnostics_balance
     count_word = "диагностика" if count == 1 else "диагностики" if 2 <= count <= 4 else "диагностик"
@@ -740,7 +750,7 @@ async def send_balance_info(user_id: int, message: Message, is_edit: bool = Fals
 @router.callback_query(F.data == "show_balance")
 async def show_balance_callback(callback: CallbackQuery):
     """Показать баланс по callback."""
-    await send_balance_info(callback.from_user.id, callback.message, is_edit=True)
+    await send_balance_info(callback.from_user, callback.message, is_edit=True)
     await callback.answer()
 
 
@@ -748,5 +758,5 @@ async def show_balance_callback(callback: CallbackQuery):
 @router.message(F.text == "💳 Баланс")
 async def cmd_balance(message: Message):
     """Показать баланс пользователя."""
-    await send_balance_info(message.from_user.id, message, is_edit=False)
+    await send_balance_info(message.from_user, message, is_edit=False)
 
