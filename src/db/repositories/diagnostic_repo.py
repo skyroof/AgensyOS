@@ -60,6 +60,7 @@ async def get_active_session(
         .where(DiagnosticSession.user_id == user_id)
         .where(DiagnosticSession.status == "in_progress")
         .order_by(DiagnosticSession.started_at.desc())
+        .limit(1)
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()

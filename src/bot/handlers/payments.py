@@ -700,7 +700,7 @@ async def send_balance_info(tg_user: User, message: Message, is_edit: bool = Fal
     """Отправить или обновить информацию о балансе."""
     async with get_session() as session:
         # Ensure user exists
-        await get_or_create_user(
+        user = await get_or_create_user(
             session, 
             tg_user.id, 
             tg_user.username, 
@@ -708,8 +708,8 @@ async def send_balance_info(tg_user: User, message: Message, is_edit: bool = Fal
             tg_user.last_name
         )
         
-        balance = await balance_repo.get_user_balance(session, tg_user.id)
-        payments = await balance_repo.get_user_payments(session, tg_user.id)
+        balance = await balance_repo.get_user_balance(session, user.id)
+        payments = await balance_repo.get_user_payments(session, user.id)
     
     count = balance.diagnostics_balance
     count_word = "диагностика" if count == 1 else "диагностики" if 2 <= count <= 4 else "диагностик"
