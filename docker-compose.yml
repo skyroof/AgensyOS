@@ -12,11 +12,24 @@ services:
     volumes:
       - ./debug_logs:/app/debug_logs
       - ./migrations:/app/migrations
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
       db:
         condition: service_healthy
+
+  watchdog:
+    build: .
+    container_name: diagnostic-watchdog
+    restart: unless-stopped
+    command: python -u scripts/watchdog.py
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - bot
 
   redis:
     image: public.ecr.aws/docker/library/redis:7-alpine

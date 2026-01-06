@@ -45,8 +45,17 @@ async def main():
         )
     
     # Настройка логирования
-    log_handler = logging.StreamHandler(sys.stdout)
+    handlers = [logging.StreamHandler(sys.stdout)]
     
+    # Добавляем логгирование в файл
+    import os
+    os.makedirs("logs", exist_ok=True)
+    file_handler = logging.FileHandler("logs/app.log")
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    ))
+    handlers.append(file_handler)
+
     if config.log_format.lower() == "json":
         try:
             from pythonjsonlogger import jsonlogger
@@ -54,18 +63,18 @@ async def main():
                 "%(asctime)s %(name)s %(levelname)s %(message)s",
                 rename_fields={"levelname": "level", "asctime": "timestamp"}
             )
-            log_handler.setFormatter(formatter)
+            handlers[0].setFormatter(formatter) # Apply to stream handler
         except ImportError:
             pass
 
-    if not log_handler.formatter:
-        log_handler.setFormatter(logging.Formatter(
+    if not handlers[0].formatter:
+        handlers[0].setFormatter(logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         ))
 
     logging.basicConfig(
         level=getattr(logging, config.log_level),
-        handlers=[log_handler],
+        handlers=handlers,
         force=True,
     )
     logger = logging.getLogger(__name__)

@@ -37,9 +37,7 @@ def check_server():
         commands = [
             "cd /root/bot",
             "git pull",
-            "docker compose restart bot",
-            # "docker cp scripts/send_pdf_reports.py diagnostic-bot:/app/scripts/send_pdf_reports.py",
-            # "docker compose exec -T bot python -u scripts/send_pdf_reports.py 19 21 --target-id 785561885"
+            "docker compose up -d --build --remove-orphans",
         ]
         
         full_command = " && ".join(commands)
