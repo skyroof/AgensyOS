@@ -307,7 +307,7 @@ async def start_reminder(user_id: int, session_id: int):
     try:
         async with get_session() as db:
             # Сначала отменяем старые, чтобы не дублировать
-            await cancel_stuck_reminders(db, user_id, session_id)
+            await cancel_stuck_reminders(db, session_id)
             # Планируем новое (5 минут)
             await schedule_stuck_reminder(db, user_id, session_id, minutes_delay=5)
             await db.commit()
@@ -315,13 +315,13 @@ async def start_reminder(user_id: int, session_id: int):
         logger.error(f"Failed to start reminder: {e}")
 
 
-async def cancel_reminder(user_id: int, session_id: int):
+async def cancel_reminder(session_id: int):
     """Отменяет таймер напоминания (через БД)."""
     if not session_id:
         return
     try:
         async with get_session() as db:
-            await cancel_stuck_reminders(db, user_id, session_id)
+            await cancel_stuck_reminders(db, session_id)
             await db.commit()
     except Exception as e:
         logger.error(f"Failed to cancel reminder: {e}")
@@ -536,7 +536,7 @@ async def handle_answer(message: Message, state: FSMContext, bot: Bot):
     db_session_id = data.get("db_session_id")
     user_id = message.from_user.id
     if db_session_id:
-        await cancel_reminder(user_id, db_session_id)
+        await cancel_reminder(db_session_id)
 
     await message.answer(
         f"<b>Твой ответ:</b>\n\n{answer_text}\n\nОтправляем или хочешь дополнить?",

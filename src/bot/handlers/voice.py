@@ -131,7 +131,10 @@ async def process_voice_answer(message: Message, state: FSMContext, bot: Bot):
     from src.bot.handlers.diagnostic import cancel_reminder, get_typing_hint
     
     # Отменяем таймер напоминания
-    cancel_reminder(message.chat.id)
+    data = await state.get_data()
+    db_session_id = data.get("db_session_id")
+    if db_session_id:
+        await cancel_reminder(db_session_id)
     
     duration = message.voice.duration or 0
     
