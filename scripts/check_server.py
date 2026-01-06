@@ -31,14 +31,14 @@ def check_server():
             timeout=60
         )
         
-        print("✅ Connected! Sending PDF reports to @laitnerbro...")
+        print("✅ Connected! Checking server status...")
         
-        # Check status
+        # Check files and containers
         commands = [
             "cd /root/bot",
-            "git pull",
-            "docker compose build --no-cache bot watchdog",
-            "docker compose up -d --remove-orphans",
+            "ls -la migrations/versions",
+            "docker compose ps",
+            "docker compose logs --tail=20 bot"
         ]
         
         full_command = " && ".join(commands)

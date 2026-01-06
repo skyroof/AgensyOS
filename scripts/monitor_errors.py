@@ -35,6 +35,11 @@ def fetch_and_analyze_errors():
         # Let's try finding it or using compose logs.
         # 'docker compose logs' is safer if we know the path.
         
+        # Check status first
+        print("Checking container status...")
+        stdin, stdout, stderr = client.exec_command("cd /root/bot && docker compose ps")
+        print(stdout.read().decode())
+        
         cmd = "cd /root/bot && docker compose logs --tail 2000 --no-log-prefix bot"
         stdin, stdout, stderr = client.exec_command(cmd)
         

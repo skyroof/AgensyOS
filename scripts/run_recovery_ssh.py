@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-def check_server():
+def run_recovery():
     # Configuration
     host = os.getenv("SSH_HOST", "89.169.47.138")
     user = os.getenv("SSH_USER", "root")
@@ -31,19 +31,22 @@ def check_server():
             timeout=60
         )
         
-        print("✅ Connected! Sending PDF reports to @laitnerbro...")
+        print("✅ Connected! Running recovery script...")
         
-        # Check status
+        # Command to run recovery script inside the container
+        # We need to make sure the script is available in the container
+        # Since we just deployed, it should be there.
+        # We use 'bot' service context.
+        
         commands = [
             "cd /root/bot",
-            "git pull",
-            "docker compose build --no-cache bot watchdog",
-            "docker compose up -d --remove-orphans",
+            "docker compose run --rm bot python scripts/recover_sessions.py"
         ]
         
         full_command = " && ".join(commands)
         
         # Execute command
+        # We use exec_command to stream output
         stdin, stdout, stderr = client.exec_command(full_command, get_pty=True)
         
         # Stream output
@@ -57,4 +60,4 @@ def check_server():
         client.close()
 
 if __name__ == "__main__":
-    check_server()
+    run_recovery()
