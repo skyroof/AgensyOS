@@ -21,6 +21,7 @@ services:
 
   watchdog:
     build: .
+    user: root
     container_name: diagnostic-watchdog
     restart: unless-stopped
     command: python -u scripts/watchdog.py
