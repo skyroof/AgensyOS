@@ -1332,11 +1332,15 @@ async def compare_with_diagnostic(callback: CallbackQuery):
         delta_sign = "+" if delta > 0 else ""
         
         # Сравниваем категории
-        old_analysis = old_session.analysis_history or {}
-        new_analysis = new_session.analysis_history or {}
+        old_history = old_session.analysis_history or []
+        new_history = new_session.analysis_history or []
         
-        old_avgs = old_analysis.get("raw_averages", {})
-        new_avgs = new_analysis.get("raw_averages", {})
+        # Рассчитываем scores для получения raw_averages
+        old_calculated = calculate_category_scores(old_history)
+        new_calculated = calculate_category_scores(new_history)
+        
+        old_avgs = old_calculated.get("raw_averages", {})
+        new_avgs = new_calculated.get("raw_averages", {})
         
         # Находим улучшения и снижения
         improvements = []

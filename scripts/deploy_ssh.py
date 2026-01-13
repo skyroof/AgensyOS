@@ -42,6 +42,7 @@ def deploy():
         # Use deploy.sh for all logic
         commands = [
             "cd /root/bot",
+            "rm -f Dockerfile.watchdog", # Remove conflicting file
             "git reset --hard", 
             "git pull",
             "chmod +x deploy.sh",
