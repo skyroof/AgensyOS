@@ -83,26 +83,6 @@ async def safe_send_chat_action(bot: Bot, chat_id: int, action: ChatAction) -> N
         pass  # Игнорируем ошибки (топики, форумы, etc)
 
 
-async def start_reminder(user_id: int, session_id: int):
-    """Запустить таймер напоминания (через БД)."""
-    try:
-        async with get_session() as db:
-            await schedule_stuck_reminder(db, user_id, session_id)
-            await db.commit()
-    except Exception as e:
-        logger.error(f"Failed to schedule reminder: {e}")
-
-
-async def cancel_reminder(session_id: int):
-    """Отменить таймер напоминания."""
-    try:
-        async with get_session() as db:
-            await cancel_stuck_reminders(db, session_id)
-            await db.commit()
-    except Exception as e:
-        logger.error(f"Failed to cancel reminder: {e}")
-
-
 def generate_progress_message(
     current_question: int,
     total_questions: int,
@@ -501,7 +481,8 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         )
         
         # Ставим таймер напоминания (5 минут)
-        await start_reminder(user_id, db_session_id)
+        db_user_id = data.get("db_user_id")
+        await start_reminder(db_user_id, db_session_id)
         
         await state.set_state(DiagnosticStates.answering)
 
@@ -585,8 +566,10 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         answer_stats.append(stats_entry)
         
         # Сохраняем в историю
-        history.append({"role": "assistant", "content": question_text})
-        history.append({"role": "user", "content": answer_text})
+        history.append({
+            "question": question_text,
+            "answer": answer_text
+        })
         
         # Сохраняем анализ (только важные поля)
         analysis_history.append({
@@ -664,8 +647,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         )
         
         # Снова ставим таймер
-        user_id = callback.from_user.id
-        await start_reminder(user_id, db_session_id)
+        await start_reminder(db_user_id, db_session_id)
         
         await state.set_state(DiagnosticStates.answering)
         
@@ -798,7 +780,10 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
             insights=all_insights,
             gaps=all_gaps
         )
-        await message.answer(f"Не удалось сгенерировать полный отчет, но вот твои баллы:\n\n{fallback_report}")
+        await message.answer(
+            f"Не удалось сгенерировать полный отчет, но вот твои баллы:\n\n{fallback_report}",
+            reply_markup=get_post_diagnostic_keyboard()
+        )
         await state.clear()
 
 

@@ -10,6 +10,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://user:password@db:5432/diagnostic_bot
     volumes:
+      - ./src:/app/src
       - ./debug_logs:/app/debug_logs
       - ./migrations:/app/migrations
       - ./logs:/app/logs
@@ -20,11 +21,12 @@ services:
         condition: service_healthy
 
   watchdog:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.watchdog
     user: root
     container_name: diagnostic-watchdog
     restart: unless-stopped
-    command: python -u scripts/watchdog.py
     env_file:
       - .env
     volumes:

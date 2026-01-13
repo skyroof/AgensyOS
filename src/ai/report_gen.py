@@ -75,8 +75,22 @@ async def generate_detailed_report(
     
     # Формируем контекст диалога
     dialog_text = ""
-    for i, item in enumerate(conversation_history, 1):
-        dialog_text += f"\n\nВОПРОС {i}: {item['question']}\nОТВЕТ: {item['answer']}"
+    
+    # Нормализация истории (если вдруг пришел формат OpenAI)
+    normalized_history = []
+    if conversation_history:
+        if 'question' in conversation_history[0]:
+            normalized_history = conversation_history
+        else:
+            # Пытаемся конвертировать из OpenAI формата
+            for k in range(0, len(conversation_history), 2):
+                if k+1 < len(conversation_history):
+                    q = conversation_history[k].get('content', '')
+                    a = conversation_history[k+1].get('content', '')
+                    normalized_history.append({'question': q, 'answer': a})
+
+    for i, item in enumerate(normalized_history, 1):
+        dialog_text += f"\n\nВОПРОС {i}: {item.get('question', '')}\nОТВЕТ: {item.get('answer', '')}"
     
     # Собираем все инсайты из анализов
     all_insights = []

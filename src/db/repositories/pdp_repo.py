@@ -537,7 +537,7 @@ async def get_active_plans_for_daily_push(session: AsyncSession) -> list[PdpPlan
         .where(PdpPlan.status == "active")
         .where(PdpReminder.enabled == True)
         .where(PdpReminder.reminder_time == current_time)
-        .options(selectinload(PdpPlan.tasks))
+        .options(selectinload(PdpPlan.tasks), selectinload(PdpPlan.user))
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())

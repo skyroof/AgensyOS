@@ -10,6 +10,7 @@ import sentry_sdk
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from src.core.config import get_settings
@@ -120,7 +121,17 @@ async def main():
     try:
         # Алерт о запуске
         await send_admin_alert(bot, "✅ Бот успешно запущен на сервере!")
-        await dp.start_polling(bot)
+        
+        # Запуск polling с авто-реконнектом при сетевых ошибках
+        while True:
+            try:
+                await dp.start_polling(bot)
+                # Если start_polling вернул управление без ошибки — значит был штатный останов (например, SIGINT)
+                break 
+            except TelegramNetworkError as e:
+                logger.error(f"⚠️ Telegram Network Error: {e}. Retrying in 5 seconds...")
+                await asyncio.sleep(5)
+                
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
         await send_admin_alert(bot, f"❌ Критическая ошибка:\n<code>{e}</code>")

@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install docker SDK and requests
+RUN pip install docker requests python-dotenv
+
+# Copy script
+COPY scripts/watchdog.py .
+
+CMD ["python", "-u", "watchdog.py"]

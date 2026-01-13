@@ -312,7 +312,7 @@ async def send_daily_pdp_tasks(bot: Bot) -> int:
                     )
 
                     await bot.send_message(
-                        plan.user_id, text, reply_markup=keyboard, parse_mode="HTML"
+                        plan.user.telegram_id, text, reply_markup=keyboard, parse_mode="HTML"
                     )
 
                     # Обновляем статус на sent (чтобы не слать повторно)
@@ -330,7 +330,7 @@ async def send_daily_pdp_tasks(bot: Bot) -> int:
                     sent_count += 1
 
                 except Exception as e:
-                    logger.error(f"Failed to send PDP task to user {plan.user_id}: {e}")
+                    logger.error(f"Failed to send PDP task to user {plan.user.telegram_id} (id={plan.user_id}): {e}")
 
     except Exception as e:
         logger.error(f"PDP Scheduler error: {e}")

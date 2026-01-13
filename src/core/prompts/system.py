@@ -227,10 +227,24 @@ def get_question_prompt(
     """
     # Формируем контекст из истории
     history_text = ""
-    total_items = len(conversation_history)
+    
+    # Нормализация истории (если вдруг пришел формат OpenAI)
+    normalized_history = []
+    if conversation_history:
+        if 'question' in conversation_history[0]:
+            normalized_history = conversation_history
+        else:
+            # Пытаемся конвертировать из OpenAI формата
+            for k in range(0, len(conversation_history), 2):
+                if k+1 < len(conversation_history):
+                    q = conversation_history[k].get('content', '')
+                    a = conversation_history[k+1].get('content', '')
+                    normalized_history.append({'question': q, 'answer': a})
+
+    total_items = len(normalized_history)
     KEEP_LAST = 5  # Сколько последних вопросов сохранять
     
-    for i, item in enumerate(conversation_history, 1):
+    for i, item in enumerate(normalized_history, 1):
         # Context Window Management:
         # Если история длинная (> 7 вопросов), оставляем 1-й (знакомство) и последние 5.
         # Середину сворачиваем.
@@ -239,7 +253,7 @@ def get_question_prompt(
                  history_text += "\n\n[... Предыдущие вопросы скрыты для экономии контекста ...]"
             continue
 
-        history_text += f"\n\nВОПРОС {i}: {item['question']}\nОТВЕТ: {item['answer']}"
+        history_text += f"\n\nВОПРОС {i}: {item.get('question', '')}\nОТВЕТ: {item.get('answer', '')}"
         
         # Добавляем анализ, если он есть для этого шага
         # (analysis_history обычно синхронен с conversation_history)

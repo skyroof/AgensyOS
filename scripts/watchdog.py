@@ -30,6 +30,15 @@ def send_telegram_message(text):
     except Exception as e:
         print(f"❌ Failed to send alert: {e}")
 
+def restart_bot_container(client):
+    try:
+        container = client.containers.get(CONTAINER_NAME)
+        container.restart()
+        return True
+    except Exception as e:
+        print(f"❌ Failed to restart container: {e}")
+        return False
+
 def main():
     print("🚀 Watchdog started (Docker Socket mode)...")
     
@@ -40,15 +49,24 @@ def main():
         send_telegram_message(f"❌ <b>Watchdog Error</b>\nFailed to connect to Docker Socket: {e}")
         return
 
-    send_telegram_message("🤖 <b>Watchdog перезапущен</b>\nСлежу за логами контейнера через Docker Socket.")
+    send_telegram_message("🤖 <b>Watchdog перезапущен</b>\nСлежу за логами и буду автоматически перезапускать бота при критических ошибках.")
     
     # Начинаем следить с текущего момента
     last_log_time = datetime.now()
     
     while True:
         try:
-            container = client.containers.get(CONTAINER_NAME)
-            
+            try:
+                container = client.containers.get(CONTAINER_NAME)
+                if container.status != 'running':
+                    send_telegram_message(f"⚠️ <b>Внимание:</b> Контейнер бота не запущен (статус: {container.status}). Пытаюсь запустить...")
+                    container.start()
+                    time.sleep(10) # Даем время на старт
+            except docker.errors.NotFound:
+                send_telegram_message("❌ <b>Критическая ошибка:</b> Контейнер бота не найден!")
+                time.sleep(CHECK_INTERVAL)
+                continue
+
             # Получаем логи с последнего времени
             logs = container.logs(since=int(last_log_time.timestamp()), stderr=True, stdout=True)
             logs_decoded = logs.decode('utf-8', errors='ignore')
@@ -97,15 +115,18 @@ def main():
                 
                 if len(unique_errors) > 5:
                     report += f"<i>...и еще {len(unique_errors) - 5} ошибок.</i>"
-                
+
+                report += "\n\n🔄 <b>Пытаюсь автоматически перезапустить бота...</b>"
                 send_telegram_message(report)
-            else:
-                print("✅ No new errors")
-            
-        except docker.errors.NotFound:
-            print(f"❌ Container {CONTAINER_NAME} not found")
+                
+                if restart_bot_container(client):
+                    send_telegram_message("✅ <b>Бот успешно перезапущен!</b>\nПопробуй повторить действие через минуту.")
+                else:
+                    send_telegram_message("❌ <b>Не удалось перезапустить бота автоматически.</b> Требуется ручное вмешательство.")
+
         except Exception as e:
-            print(f"❌ Error checking logs: {e}")
+            print(f"Watchdog Loop Error: {e}")
+            # Не спамим ошибками самого вотчдога слишком часто
             
         time.sleep(CHECK_INTERVAL)
 
