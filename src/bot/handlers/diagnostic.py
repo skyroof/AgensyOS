@@ -647,6 +647,7 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         )
         
         # Снова ставим таймер
+        db_user_id = data.get("db_user_id")
         await start_reminder(db_user_id, db_session_id)
         
         await state.set_state(DiagnosticStates.answering)

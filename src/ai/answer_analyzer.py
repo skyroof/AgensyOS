@@ -59,9 +59,16 @@ def robust_json_parse(text: str) -> dict:
     # Стратегия 1: Убираем markdown code blocks
     # Ищем ```json ... ``` или просто ``` ... ```
     import re
+    # Сначала пытаемся найти полный блок
     code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     if code_block_match:
         text = code_block_match.group(1).strip()
+    else:
+        # Если не нашли закрывающего, но есть открывающий - берем всё после него
+        # Это частая ошибка когда ответ обрезается или AI забывает закрыть блок
+        open_block_match = re.search(r"```(?:json)?\s*([\s\S]*)", text, re.IGNORECASE)
+        if open_block_match:
+             text = open_block_match.group(1).strip()
     
     # Стратегия 2: Прямой парсинг
     try:
