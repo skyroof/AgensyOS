@@ -468,45 +468,40 @@ async def process_pdf_download(callback: CallbackQuery):
                     # Преобразуем PDP в dict для PDF
                     pdp_data = {
                         "main_focus": pdp.main_focus,
-                        "motivation_message": pdp.motivation_message,
-                        "plan_30_days": pdp.plan_30_days,
-                        "plan_60_days": pdp.plan_60_days,
-                        "plan_90_days": pdp.plan_90_days,
-                        "success_metrics": pdp.success_metrics,
                         "primary_goals": [
                             {
                                 "metric_name": g.metric_name,
                                 "current_score": g.current_score,
                                 "target_score": g.target_score,
-                                "resources": [
-                                    {"title": r.title, "type": r.type}
-                                    for r in g.resources[:2]
-                                ] if g.resources else [],
+                                "priority_reason": g.priority_reason,
+                                "actions": g.actions,
+                                "resources": [{"type": r.type, "title": r.title} for r in g.resources]
                             }
                             for g in pdp.primary_goals
                         ],
+                        "plan_30_days": pdp.plan_30_days,
+                        "success_metrics": pdp.success_metrics,
+                        "motivation_message": pdp.motivation_message,
                     }
                     
-                    # Получаем бенчмарк
-                    try:
-                        benchmark = await get_benchmark(
-                            session=db,
-                            user_score=diagnostic_session.total_score or 0,
-                            role=diagnostic_session.role,
-                            role_name=diagnostic_session.role_name,
-                            experience=diagnostic_session.experience,
-                            experience_name=diagnostic_session.experience_name,
-                        )
-                        if benchmark.overall_total_sessions > 0:
-                            benchmark_data = {
-                                "avg_score": benchmark.overall_avg_score,
-                                "percentile": benchmark.overall_percentile,
-                            }
-                    except Exception as e:
-                        logger.warning(f"Failed to get benchmark for PDF: {e}")
-                        
                 except Exception as e:
                     logger.warning(f"Failed to build profile/PDP for PDF: {e}")
+
+            # Q1 1.4: Real-time Benchmarking integration
+            try:
+                benchmark_res = await get_benchmark(
+                    session=db,
+                    user_score=scores['total'],
+                    role=diagnostic_session.role,
+                    role_name=diagnostic_session.role_name,
+                    experience=diagnostic_session.experience,
+                    experience_name=diagnostic_session.experience_name,
+                )
+                
+                if benchmark_res.has_enough_data:
+                    benchmark_data = benchmark_res.to_dict()
+            except Exception as e:
+                logger.warning(f"Failed to fetch benchmark for PDF: {e}")
             
             # Получаем имя пользователя
             user_name = callback.from_user.first_name or "Кандидат"

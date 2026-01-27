@@ -40,6 +40,13 @@ debug_logs/
 data/
 *.db
 *.sqlite3
+*.log
+unknown_errors.txt
+
+# Tests
+tests/e2e/*.log
+tests/e2e/*.session
+tests/e2e/*.session-journal
 
 # Docker
 docker-data/

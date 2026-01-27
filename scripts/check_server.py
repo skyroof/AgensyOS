@@ -37,7 +37,7 @@ def check_server():
         commands = [
             "cd /root/bot",
             "ls -la migrations/versions",
-            "docker compose ps",
+            "docker compose ps -a",
             "docker compose logs --tail=20 bot"
         ]
         

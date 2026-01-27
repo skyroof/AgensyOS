@@ -45,7 +45,7 @@ from src.ai.answer_analyzer import (
     METRIC_NAMES_RU,
     METRIC_CATEGORIES,
 )
-from src.ai.report_gen import generate_detailed_report, split_message, split_report_into_blocks, sanitize_html, generate_fallback_report
+from src.ai.report_gen import generate_detailed_report, stream_detailed_report, split_message, split_report_into_blocks, sanitize_html, generate_fallback_report
 from src.ai.client import AIServiceError
 from src.analytics import build_profile, format_profile_text, get_benchmark, format_benchmark_text, build_pdp, format_pdp_text
 from src.db import get_session
@@ -58,7 +58,7 @@ from src.db.repositories import (
     get_or_create_user,
     get_active_session,
 )
-from src.db.repositories.reminder_repo import schedule_stuck_reminder, cancel_stuck_reminders, schedule_smart_reminder
+from src.db.repositories.reminder_repo import schedule_stuck_reminder, cancel_stuck_reminders, schedule_smart_reminder, cancel_all_user_reminders
 from src.utils.message_splitter import send_long_message, send_with_continuation
 
 router = Router(name="diagnostic")
@@ -310,10 +310,17 @@ async def cancel_reminder(session_id: int):
 @router.callback_query(F.data == "start_diagnostic")
 async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Начало диагностики — первый вопрос."""
+    logger.info(f"START_DIAGNOSTIC triggered by {callback.from_user.id}")
+    # Сразу отвечаем, чтобы убрать часики (и избежать timeout)
+    try:
+        await callback.answer()
+        logger.info("Callback answered successfully")
+    except Exception as e:
+        logger.warning(f"Failed to answer callback in start_diagnostic: {e}")
+
     # Prevent double clicks
     current_state = await state.get_state()
     if current_state == DiagnosticStates.starting:
-        await callback.answer()
         return
 
     # Сразу меняем состояние, чтобы избежать двойного клика
@@ -322,93 +329,177 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
     
     # Проверяем наличие роли/опыта (если стейт пустой после рестарта)
     if "role" not in data or "experience" not in data:
+        # Попытка восстановления сессии из БД
+        try:
+            async with get_session() as db:
+                user = await get_or_create_user(
+                    session=db,
+                    telegram_id=callback.from_user.id,
+                    username=callback.from_user.username,
+                    first_name=callback.from_user.first_name,
+                    last_name=callback.from_user.last_name,
+                )
+                active_session = await get_active_session(db, user.id)
+                
+                if active_session:
+                    logger.info(f"Restoring session {active_session.id} for user {user.id}")
+                    # Восстанавливаем данные в стейт
+                    await state.update_data(
+                        role=active_session.role,
+                        role_name=active_session.role_name,
+                        experience=active_session.experience,
+                        experience_name=active_session.experience_name,
+                        db_user_id=user.id,
+                        db_session_id=active_session.id,
+                        current_question=active_session.current_question,
+                        diagnostic_mode=active_session.mode,
+                        conversation_history=active_session.conversation_history or [],
+                        analysis_history=active_session.analysis_history or [],
+                        answer_stats=[], # Статистика может быть потеряна, но это не критично
+                    )
+                    # Обновляем data, чтобы пройти проверки ниже
+                    data = await state.get_data()
+                    
+                    # Если сессия уже была в процессе, перенаправляем на восстановление
+                    if active_session.current_question > 1:
+                        await callback.message.edit_text(
+                            "🔄 <b>Восстанавливаю контекст...</b>\n\n"
+                            f"Нашел твою активную сессию (Вопрос {active_session.current_question}). Продолжаем!",
+                        )
+                        
+                        try:
+                            # Генерация текущего вопроса
+                            question = await generate_question(
+                                role=active_session.role,
+                                role_name=active_session.role_name,
+                                experience=active_session.experience,
+                                question_number=active_session.current_question,
+                                conversation_history=active_session.conversation_history,
+                                analysis_history=active_session.analysis_history
+                            )
+                            
+                            await state.update_data(current_question_text=question)
+                            
+                            await callback.message.answer(
+                                f"{active_session.current_question}️⃣ <b>Вопрос {active_session.current_question}/{get_total_questions(active_session.mode)}</b>\n\n{question}",
+                                reply_markup=get_question_keyboard(show_skip=False)
+                            )
+                            await state.set_state(DiagnosticStates.answering)
+                            
+                            # Ставим таймер напоминания
+                            await start_reminder(user.id, active_session.id)
+                            return
+                        except Exception as e:
+                            logger.error(f"Failed to restore question: {e}")
+                            # Fallthrough to normal start if failed
+                            pass 
+        except Exception as e:
+            logger.error(f"Failed to restore session: {e}")
+
+    # Повторная проверка
+    if "role" not in data or "experience" not in data:
         logger.warning(f"Missing state data for user {callback.from_user.id}")
         await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-        # Лучше не отправлять новое сообщение, а просто алерт, или редирект на старт
-        # await callback.message.answer("⚠️ <b>Сессия истекла</b>\n\nПожалуйста, начни заново: /start")
         await state.clear()
         return
 
     await state.set_state(DiagnosticStates.starting)
 
+    # UX: Сразу показываем лоадер, чтобы юзер видел реакцию
+    try:
+        loading_msg = await callback.message.edit_text(
+            "🚀 <b>Запускаю диагностику...</b>"
+        )
+    except TelegramBadRequest:
+        # Если сообщение не изменилось или удалено
+        loading_msg = callback.message
+
     try:
         user_id = callback.from_user.id
         db_user_id = data.get("db_user_id")
+        db_session_id = data.get("db_session_id")
         
-        # ==================== ПРОВЕРКА ДОСТУПА ====================
-        async with get_session() as db:
-            # Если db_user_id нет в стейте — восстанавливаем
-            if not db_user_id:
-                user = await get_or_create_user(
-                    session=db,
-                    telegram_id=user_id,
-                    username=callback.from_user.username,
-                    first_name=callback.from_user.first_name,
-                    last_name=callback.from_user.last_name,
-                )
-                db_user_id = user.id
-                await state.update_data(db_user_id=db_user_id)
-            
-            # Проверяем доступ используя PK пользователя!
-            access = await balance_repo.check_diagnostic_access(db, db_user_id)
-        
-        if not access.allowed:
-            # Возвращаем состояние назад, если отказ
-            await state.set_state(DiagnosticStates.ready_to_start)
-            
-            # Нет доступа — показываем paywall
-            await callback.message.edit_text(
-                "🔒 <b>Нет доступных диагностик</b>\n\n"
-                f"Баланс: {access.balance} диагностик\n"
-                f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
-                "Купи диагностику, чтобы продолжить!",
-                reply_markup=get_paywall_keyboard(),
-            )
-            await callback.answer("Нужна подписка", show_alert=True)
-            return
-        
-        # Определяем режим (demo или full)
-        diagnostic_mode = access.mode  # "demo" или "full"
-        total_questions = get_total_questions(diagnostic_mode)
-        
-        logger.info(f"[ACCESS] User {user_id}: mode={diagnostic_mode}, balance={access.balance}")
-        
-        # ==================== ТРАНЗАКЦИЯ: СПИСАНИЕ + СОЗДАНИЕ ====================
-        db_session_id = None
-        try:
+        if not db_session_id:
+            # ==================== ПРОВЕРКА ДОСТУПА ====================
             async with get_session() as db:
-                # 1. Списываем диагностику с баланса (без коммита)
-                success = await balance_repo.use_diagnostic(db, db_user_id, diagnostic_mode, commit=False)
-                if not success:
-                    # Если вдруг баланс изменился между проверкой и списанием
-                    await state.set_state(DiagnosticStates.ready_to_start)
-                    await callback.answer("Ошибка доступа: баланс исчерпан", show_alert=True)
-                    return
-
-                # 2. Создаем сессию (без коммита)
-                diagnostic_session = await create_session(
-                    session=db,
-                    user_id=db_user_id,
-                    role=data["role"],
-                    role_name=data["role_name"],
-                    experience=data["experience"],
-                    experience_name=data["experience_name"],
-                    mode=diagnostic_mode,
-                    commit=False,
+                # Если db_user_id нет в стейте — восстанавливаем
+                if not db_user_id:
+                    user = await get_or_create_user(
+                        session=db,
+                        telegram_id=user_id,
+                        username=callback.from_user.username,
+                        first_name=callback.from_user.first_name,
+                        last_name=callback.from_user.last_name,
+                    )
+                    db_user_id = user.id
+                    await state.update_data(db_user_id=db_user_id)
+                
+                # Проверяем доступ используя PK пользователя!
+                access = await balance_repo.check_diagnostic_access(db, db_user_id)
+            
+            if not access.allowed:
+                # Возвращаем состояние назад, если отказ
+                await state.set_state(DiagnosticStates.ready_to_start)
+                
+                # Нет доступа — показываем paywall
+                await callback.message.edit_text(
+                    "🔒 <b>Нет доступных диагностик</b>\n\n"
+                    f"Баланс: {access.balance} диагностик\n"
+                    f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
+                    "Купи диагностику, чтобы продолжить!",
+                    reply_markup=get_paywall_keyboard(),
                 )
-                
-                # 3. Фиксируем изменения
-                await db.commit()
-                await db.refresh(diagnostic_session)
-                db_session_id = diagnostic_session.id
-                
-                logger.info(f"Created {diagnostic_mode} session {db_session_id} for user {user_id}")
-                
-        except Exception as e:
-            logger.error(f"Failed to create session in DB: {e}")
-            await state.set_state(DiagnosticStates.ready_to_start)
-            await callback.answer("Ошибка базы данных. Попробуй позже.", show_alert=True)
-            return
+                await callback.answer("Нужна подписка", show_alert=True)
+                return
+            
+            # Определяем режим (demo или full)
+            diagnostic_mode = access.mode  # "demo" или "full"
+            total_questions = get_total_questions(diagnostic_mode)
+            
+            logger.info(f"[ACCESS] User {user_id}: mode={diagnostic_mode}, balance={access.balance}")
+            
+            # ==================== ТРАНЗАКЦИЯ: СПИСАНИЕ + СОЗДАНИЕ ====================
+            try:
+                async with get_session() as db:
+                    # 1. Списываем диагностику с баланса (без коммита)
+                    success = await balance_repo.use_diagnostic(db, db_user_id, diagnostic_mode, commit=False)
+                    if not success:
+                        # Если вдруг баланс изменился между проверкой и списанием
+                        await state.set_state(DiagnosticStates.ready_to_start)
+                        await callback.answer("Ошибка доступа: баланс исчерпан", show_alert=True)
+                        return
+
+                    # 2. Очищаем все старые напоминания
+                    await cancel_all_user_reminders(db, db_user_id)
+
+                    # 3. Создаем сессию (без коммита)
+                    diagnostic_session = await create_session(
+                        session=db,
+                        user_id=db_user_id,
+                        role=data["role"],
+                        role_name=data["role_name"],
+                        experience=data["experience"],
+                        experience_name=data["experience_name"],
+                        mode=diagnostic_mode,
+                        commit=False,
+                    )
+                    
+                    # 3. Фиксируем изменения
+                    await db.commit()
+                    await db.refresh(diagnostic_session)
+                    db_session_id = diagnostic_session.id
+                    
+                    logger.info(f"Created {diagnostic_mode} session {db_session_id} for user {user_id}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to create session in DB: {e}")
+                await state.set_state(DiagnosticStates.ready_to_start)
+                await callback.answer("Ошибка базы данных. Попробуй позже.", show_alert=True)
+                return
+        else:
+            # Сессия уже есть (восстановлена)
+            diagnostic_mode = data.get("diagnostic_mode", "full")
+            total_questions = get_total_questions(diagnostic_mode)
         
         await state.update_data(
             current_question=1,
@@ -474,17 +565,18 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
         # Сохраняем вопрос
         await state.update_data(current_question_text=question)
         
-        # Обновляем сообщение на вопрос
-        await loading_msg.edit_text(
-            f"1️⃣ <b>Вопрос 1/{total_questions}</b>\n\n{question}",
-            reply_markup=get_question_keyboard(show_skip=False)
-        )
+        # Устанавливаем состояние ДО отправки вопроса, чтобы избежать race condition
+        await state.set_state(DiagnosticStates.answering)
         
         # Ставим таймер напоминания (5 минут)
         db_user_id = data.get("db_user_id")
         await start_reminder(db_user_id, db_session_id)
         
-        await state.set_state(DiagnosticStates.answering)
+        # Обновляем сообщение на вопрос
+        await loading_msg.edit_text(
+            f"1️⃣ <b>Вопрос 1/{total_questions}</b>\n\n{question}",
+            reply_markup=get_question_keyboard(show_skip=False)
+        )
 
     except Exception as e:
         logger.error(f"Error starting diagnostic: {e}", exc_info=True)
@@ -496,6 +588,7 @@ async def start_diagnostic(callback: CallbackQuery, state: FSMContext, bot: Bot)
 @router.message(DiagnosticStates.answering)
 async def handle_answer(message: Message, state: FSMContext, bot: Bot):
     """Обработка ответа пользователя."""
+    logger.info(f"handle_answer triggered for {message.from_user.id}")
     data = await state.get_data()
     
     # Валидация
@@ -529,6 +622,13 @@ async def handle_answer(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(DiagnosticStates.confirming_answer, F.data == "confirm_answer")
 async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение ответа — переход к следующему вопросу."""
+    logger.info(f"DEBUG: Entering confirm_answer for {callback.from_user.id}")
+    try:
+        await callback.answer()
+        logger.info("DEBUG: Callback answered (confirm)")
+    except Exception as e:
+        logger.error(f"DEBUG: Callback answer failed (confirm): {e}")
+
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except TelegramBadRequest:
@@ -654,7 +754,24 @@ async def confirm_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         
     except Exception as e:
         logger.error(f"Error processing answer: {e}", exc_info=True)
-        await callback.message.answer("Произошла ошибка. Попробуй ответить еще раз.")
+        # Возвращаем клавиатуру подтверждения, чтобы юзер мог повторить
+        data = await state.get_data()
+        draft = data.get("draft_answer", "")
+        await callback.message.answer(
+            f"<b>Твой ответ:</b>\n\n{draft}\n\n❌ Произошла ошибка при анализе. Попробуем еще раз?",
+            reply_markup=get_confirm_answer_keyboard()
+        )
+        # State остается confirming_answer
+
+
+@router.message(DiagnosticStates.confirming_answer)
+async def handle_text_during_confirmation(message: Message, state: FSMContext):
+    """Если юзер пишет текст во время подтверждения — считаем это редактированием."""
+    await state.update_data(draft_answer=message.text)
+    await message.answer(
+        f"<b>Твой новый ответ:</b>\n\n{message.text}\n\nОтправляем?",
+        reply_markup=get_confirm_answer_keyboard()
+    )
 
 
 @router.callback_query(F.data == "pause_session")
@@ -705,18 +822,66 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
         # Обновляем прогресс
         await report_msg.edit_text("⏳ <b>Генерирую отчет...</b>\n\n<code>▓▓▓▓░░░░░░</code> 40%\n<i>Считаю метрики...</i>")
         
-        # Генерация текста отчета
-        report_text = await generate_detailed_report(
-            role=data["role"],
-            role_name=data["role_name"],
-            experience=data["experience"],
-            conversation_history=history,
-            analysis_history=analysis_history
-        )
+        # Генерация текста отчета (Streaming)
+        report_text = ""
+        chunk_count = 0
+        last_update_time = time.time()
         
-        await report_msg.edit_text("⏳ <b>Генерирую отчет...</b>\n\n<code>▓▓▓▓▓▓▓▓░░</code> 80%\n<i>Формирую рекомендации...</i>")
+        try:
+            async for chunk in stream_detailed_report(
+                role=data["role"],
+                role_name=data["role_name"],
+                experience=data["experience"],
+                conversation_history=history,
+                analysis_history=analysis_history
+            ):
+                report_text += chunk
+                chunk_count += 1
+                
+                # Обновляем статус раз в 2 секунды, чтобы не словить FloodWait
+                current_time = time.time()
+                if current_time - last_update_time > 2.0:
+                    # Эмулируем прогресс от 40% до 90%
+                    # Предполагаем средний отчет 3000 символов
+                    estimated_pct = min(40 + int((len(report_text) / 3000) * 50), 90)
+                    filled = int(estimated_pct / 10)
+                    bar = "▓" * filled + "░" * (10 - filled)
+                    
+                    status_variations = [
+                        "<i>Пишу введение...</i>",
+                        "<i>Анализирую сильные стороны...</i>",
+                        "<i>Формулирую рекомендации...</i>",
+                        "<i>Подбираю слова...</i>",
+                        "<i>Оформляю выводы...</i>"
+                    ]
+                    status_text = status_variations[chunk_count % len(status_variations)]
+                    
+                    try:
+                        await report_msg.edit_text(
+                            f"⏳ <b>Генерирую отчет...</b>\n\n<code>{bar}</code> {estimated_pct}%\n{status_text}"
+                        )
+                        last_update_time = current_time
+                    except Exception:
+                        pass # Игнорируем ошибки редактирования (например, если текст не изменился)
+                        
+        except Exception as e:
+            logger.error(f"Streaming failed, falling back: {e}")
+            if not report_text:
+                # Если стриминг упал сразу, пробуем обычный метод или fallback
+                report_text = await generate_detailed_report(
+                    role=data["role"],
+                    role_name=data["role_name"],
+                    experience=data["experience"],
+                    conversation_history=history,
+                    analysis_history=analysis_history
+                )
+
+        logger.info(f"Report generated. Length: {len(report_text)}")
+        
+        await report_msg.edit_text("⏳ <b>Генерирую отчет...</b>\n\n<code>▓▓▓▓▓▓▓▓░░</code> 95%\n<i>Финальные штрихи...</i>")
         
         # Сохраняем результаты в БД
+        benchmark_summary = ""
         if db_session_id:
             async with get_session() as db:
                 await complete_session(
@@ -727,6 +892,30 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
                     history,
                     analysis_history
                 )
+                
+                # Q1 1.4: Real-time Benchmarking
+                try:
+                    # Получаем бенчмарк
+                    benchmark_res = await get_benchmark(
+                        session=db,
+                        user_score=scores['total'],
+                        role=data["role"],
+                        role_name=data["role_name"],
+                        experience=data["experience"],
+                        experience_name=data.get("experience_name", data["experience"]),
+                    )
+                    
+                    if benchmark_res.has_enough_data:
+                        best_pct, group = benchmark_res.get_best_percentile()
+                        # Формируем краткую строку для саммари
+                        benchmark_summary = f"\n📊 <b>Топ-{100 - best_pct}%</b> среди {group}"
+                        
+                        # Также можно добавить инсайт, если он есть
+                        if benchmark_res.insights:
+                            benchmark_summary += f"\n<i>{benchmark_res.insights[0]}</i>"
+                            
+                except Exception as e:
+                    logger.error(f"Failed to get benchmark: {e}")
         
         # Добавляем ачивки
         achievements = generate_final_achievements(answer_stats)
@@ -738,8 +927,9 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
         summary = (
             f"✅ <b>Твой результат готов!</b>\n\n"
             f"Role: <b>{data['role_name']}</b>\n"
-            f"Level: <b>{data['experience_name']}</b>\n"
-            f"Total Score: <b>{scores['total']}/100</b>\n"
+            f"Level: <b>{data.get('experience_name', data['experience'])}</b>\n"
+            f"Total Score: <b>{scores['total']}/100</b>"
+            f"{benchmark_summary}\n"
             f"{achievements}\n\n"
             f"👇 Твой подробный отчет ниже"
         )
@@ -748,7 +938,7 @@ async def finish_diagnostic(message: Message, state: FSMContext, data: dict, his
         
         # Отправляем сам отчет
         # Используем message_splitter для надежности
-        await send_long_message(message, report_text)
+        await send_long_message(message.bot, message.chat.id, report_text)
         
         # Предлагаем следующие шаги
         await message.answer(
@@ -800,6 +990,8 @@ async def handle_unknown_message(message: Message, state: FSMContext):
         return
 
     user_id = message.from_user.id
+    current_state = await state.get_state()
+    logger.info(f"handle_unknown_message triggered for {user_id}. State: {current_state}")
     
     try:
         async with get_session() as db:

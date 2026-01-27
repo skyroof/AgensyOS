@@ -158,6 +158,21 @@ async def cancel_stuck_reminders(
     await session.execute(stmt)
 
 
+async def cancel_all_user_reminders(
+    session: AsyncSession,
+    user_id: int,
+) -> None:
+    """Отменить ВСЕ активные напоминания пользователя (при старте новой диагностики)."""
+    stmt = (
+        update(DiagnosticReminder)
+        .where(DiagnosticReminder.user_id == user_id)
+        .where(DiagnosticReminder.sent.is_(False))
+        .where(DiagnosticReminder.cancelled.is_(False))
+        .values(cancelled=True)
+    )
+    await session.execute(stmt)
+
+
 async def get_pending_reminders_with_users(
     session: AsyncSession,
     before: Optional[datetime] = None,

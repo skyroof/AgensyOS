@@ -55,6 +55,19 @@ class BenchmarkResult:
     # Инсайты
     insights: list[str] = field(default_factory=list)
     
+    def to_dict(self) -> dict:
+        """Преобразовать в словарь для PDF генератора."""
+        best_pct, _ = self.get_best_percentile()
+        
+        return {
+            "avg_score": self.avg_score_combined if self.has_enough_data else 50.0,
+            "percentile": best_pct,
+            "total_sessions": self.overall_total_sessions,
+            "role_percentile": self.role_percentile,
+            "insights": self.insights,
+            "has_data": self.has_enough_data,
+        }
+    
     def get_best_percentile(self) -> tuple[int, str]:
         """
         Получить лучший (наиболее значимый) перцентиль.

@@ -2,7 +2,7 @@
 Генератор детального AI-отчёта.
 """
 import logging
-from src.ai.client import chat_completion
+from src.ai.client import chat_completion, stream_chat_completion
 from src.ai.answer_analyzer import calculate_category_scores
 
 logger = logging.getLogger(__name__)
@@ -13,31 +13,31 @@ REPORT_SYSTEM_PROMPT = """Ты — эксперт по оценке специа
 
 ФОРМАТ ОТЧЁТА (строго следуй структуре):
 
-1. **ОБЩЕЕ ВПЕЧАТЛЕНИЕ** (2-3 предложения)
+1. <b>ОБЩЕЕ ВПЕЧАТЛЕНИЕ</b> (2-3 предложения)
 Краткая характеристика кандидата как специалиста.
 
-2. **СИЛЬНЫЕ СТОРОНЫ** (3-5 пунктов)
+2. <b>СИЛЬНЫЕ СТОРОНЫ</b> (3-5 пунктов)
 Конкретные сильные качества с примерами из ответов.
 
-3. **ЗОНЫ РАЗВИТИЯ** (3-5 пунктов)
+3. <b>ЗОНЫ РАЗВИТИЯ</b> (3-5 пунктов)
 Конкретные области для улучшения с рекомендациями.
 
-4. **HARD SKILLS** (2-3 предложения)
+4. <b>HARD SKILLS</b> (2-3 предложения)
 Оценка технических компетенций.
 
-5. **SOFT SKILLS** (2-3 предложения)
+5. <b>SOFT SKILLS</b> (2-3 предложения)
 Оценка коммуникативных навыков и работы с людьми.
 
-6. **МЫШЛЕНИЕ** (2-3 предложения)
+6. <b>МЫШЛЕНИЕ</b> (2-3 предложения)
 Оценка системности, структурности, глубины рассуждений.
 
-7. **MINDSET** (2-3 предложения)
+7. <b>MINDSET</b> (2-3 предложения)
 Оценка ценностей, мотивации, зрелости.
 
-8. **РЕКОМЕНДАЦИИ ПО РАЗВИТИЮ** (3 конкретных совета)
+8. <b>РЕКОМЕНДАЦИИ ПО РАЗВИТИЮ</b> (3 конкретных совета)
 Что конкретно делать для роста.
 
-9. **ИТОГОВЫЙ ВЕРДИКТ** (1-2 коротких предложения)
+9. <b>ИТОГОВЫЙ ВЕРДИКТ</b> (1-2 коротких предложения)
 Кратко: на какой уровень подходит и почему.
 
 ПРАВИЛА:
@@ -146,6 +146,87 @@ async def generate_detailed_report(
         logger.error(f"Failed to generate report: {e}")
         # Возвращаем базовый отчёт
         return generate_fallback_report(role_name, experience, scores, all_insights, all_gaps)
+
+
+async def stream_detailed_report(
+    role: str,
+    role_name: str,
+    experience: str,
+    conversation_history: list[dict],
+    analysis_history: list[dict],
+):
+    """
+    Потоковая генерация детального AI-отчёта.
+    Yields:
+        Chunks of the report text
+    """
+    # Рассчитываем баллы
+    scores = calculate_category_scores(analysis_history)
+    
+    # Формируем контекст диалога
+    dialog_text = ""
+    
+    # Нормализация истории
+    normalized_history = []
+    if conversation_history:
+        if 'question' in conversation_history[0]:
+            normalized_history = conversation_history
+        else:
+            for k in range(0, len(conversation_history), 2):
+                if k+1 < len(conversation_history):
+                    q = conversation_history[k].get('content', '')
+                    a = conversation_history[k+1].get('content', '')
+                    normalized_history.append({'question': q, 'answer': a})
+
+    for i, item in enumerate(normalized_history, 1):
+        dialog_text += f"\n\nВОПРОС {i}: {item.get('question', '')}\nОТВЕТ: {item.get('answer', '')}"
+    
+    # Собираем все инсайты
+    all_insights = []
+    all_gaps = []
+    for analysis in analysis_history:
+        all_insights.extend(analysis.get("key_insights", []))
+        all_gaps.extend(analysis.get("gaps", []))
+    
+    user_prompt = f"""Проанализируй кандидата и напиши детальный отчёт.
+
+ПРОФИЛЬ КАНДИДАТА:
+- Роль: {role_name}
+- Заявленный опыт: {experience}
+
+БАЛЛЫ (рассчитаны на основе анализа ответов):
+- Hard Skills: {scores['hard_skills']}/30
+- Soft Skills: {scores['soft_skills']}/25
+- Thinking: {scores['thinking']}/25
+- Mindset: {scores['mindset']}/20
+- ИТОГО: {scores['total']}/100
+
+КЛЮЧЕВЫЕ НАБЛЮДЕНИЯ ИЗ АНАЛИЗА:
+{chr(10).join('- ' + i for i in all_insights[:10]) if all_insights else '- Нет данных'}
+
+ВЫЯВЛЕННЫЕ ПРОБЕЛЫ:
+{chr(10).join('- ' + g for g in all_gaps[:5]) if all_gaps else '- Не выявлено'}
+
+ПОЛНЫЙ ДИАЛОГ:
+{dialog_text}
+
+Напиши детальный отчёт согласно формату."""
+
+    try:
+        async for chunk in stream_chat_completion(
+            messages=[
+                {"role": "system", "content": REPORT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.4,
+            max_tokens=4000,
+        ):
+            yield chunk
+            
+    except Exception as e:
+        logger.error(f"Failed to stream report: {e}")
+        # Возвращаем базовый отчёт как один чанк
+        yield generate_fallback_report(role_name, experience, scores, all_insights, all_gaps)
 
 
 def generate_fallback_report(

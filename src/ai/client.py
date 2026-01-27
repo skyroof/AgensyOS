@@ -73,9 +73,9 @@ def get_ai_client() -> AsyncOpenAI:
         
         logger.info(f"Initializing AI client: base_url={settings.routerai_base_url}, model={settings.ai_model}")
         
-        # Создаём httpx клиент с таймаутами (60 сек max, 15 сек connect)
+        # Создаём httpx клиент с таймаутами (90 сек max, 10 сек connect)
         http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=15.0),
+            timeout=httpx.Timeout(90.0, connect=10.0),
             follow_redirects=True,
         )
         
@@ -208,5 +208,65 @@ async def chat_completion(
     raise AIServiceError(
         f"AI недоступен после {max_attempts} попыток: {last_error}",
         is_timeout=is_timeout,
+        attempts=max_attempts,
+    )
+
+
+async def stream_chat_completion(
+    messages: list[dict],
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+    retry: bool = True,
+):
+    """
+    Потоковая генерация ответа (generator).
+    
+    Args:
+        messages: Список сообщений
+        temperature: Креативность
+        max_tokens: Максимум токенов
+        retry: Использовать retry (только для инициализации соединения)
+        
+    Yields:
+        Кусочки текста (chunks)
+    """
+    settings = get_settings()
+    client = get_ai_client()
+    
+    max_attempts = MAX_RETRIES if retry else 1
+    delay = INITIAL_DELAY
+    last_error = None
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logger.debug(f"AI stream attempt {attempt}/{max_attempts}")
+            
+            stream = await client.chat.completions.create(
+                model=settings.ai_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+            
+            async for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+            
+            return  # Успешное завершение
+            
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            logger.warning(f"AI stream error (attempt {attempt}/{max_attempts}): {e}")
+            
+            if attempt < max_attempts:
+                await asyncio.sleep(delay)
+                delay = min(delay * BACKOFF_MULTIPLIER, MAX_DELAY)
+    
+    # Если все попытки неудачны, выбрасываем ошибку
+    # Но так как это генератор, caller должен обработать исключение при итерации
+    raise AIServiceError(
+        f"AI stream failed after {max_attempts} attempts: {last_error}",
         attempts=max_attempts,
     )

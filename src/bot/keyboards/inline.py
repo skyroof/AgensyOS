@@ -313,11 +313,17 @@ def get_timeout_keyboard(retry_action: str = "retry_analysis") -> InlineKeyboard
     return builder.as_markup()
 
 
-def get_post_diagnostic_keyboard() -> InlineKeyboardMarkup:
+def get_post_diagnostic_keyboard(session_id: int | None = None) -> InlineKeyboardMarkup:
     """
     Клавиатура после прохождения диагностики (Next Steps).
     """
     builder = InlineKeyboardBuilder()
+    
+    if session_id:
+        builder.row(
+            InlineKeyboardButton(text="📄 Скачать PDF", callback_data=f"pdf:{session_id}"),
+        )
+        
     builder.row(
         InlineKeyboardButton(text="🚀 Создать PDP", callback_data="pdp:create"),
     )

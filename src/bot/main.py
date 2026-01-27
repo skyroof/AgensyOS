@@ -10,7 +10,7 @@ import sentry_sdk
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError, TelegramServerError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from src.core.config import get_settings
@@ -74,17 +74,20 @@ async def main():
     # Инициализация базы данных
     logger.info("🗄️ Инициализация базы данных...")
     await init_db()
+    logger.info("🗄️ DB init done. Creating Bot...")
     
     # Инициализация бота
     bot = Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    logger.info("🤖 Bot created. Init Redis...")
     
     # Диспетчер с хранилищем состояний
     try:
         storage = RedisStorage.from_url(config.redis_url)
         # Проверка соединения с Redis
+        logger.info("Checking Redis connection...")
         await storage.redis.ping()
         logger.info("✅ Подключено к Redis")
     except Exception as e:
@@ -92,9 +95,9 @@ async def main():
         from aiogram.fsm.storage.memory import MemoryStorage
         storage = MemoryStorage()
 
+    logger.info("Creating Dispatcher...")
     dp = Dispatcher(storage=storage)
-    
-    # Регистрация middleware
+    logger.info("Dispatcher created. Registering middlewares...")
     dp.message.middleware(LoggingMiddleware())
     dp.callback_query.middleware(LoggingMiddleware())
     dp.message.middleware(ErrorHandlerMiddleware())
@@ -130,6 +133,9 @@ async def main():
                 break 
             except TelegramNetworkError as e:
                 logger.error(f"⚠️ Telegram Network Error: {e}. Retrying in 5 seconds...")
+                await asyncio.sleep(5)
+            except TelegramServerError as e:
+                logger.error(f"⚠️ Telegram Server Error (Bad Gateway): {e}. Retrying in 5 seconds...")
                 await asyncio.sleep(5)
                 
     except Exception as e:

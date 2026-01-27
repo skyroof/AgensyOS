@@ -40,6 +40,7 @@ from src.db.repositories import (
     get_user_sessions,
     get_user_stats,
 )
+from src.db.repositories.reminder_repo import cancel_all_user_reminders
 from src.db.repositories import balance_repo
 
 router = Router(name="start")
@@ -230,6 +231,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
 
 @router.message(F.text == "🚀 Новая диагностика")
+@router.message(F.text == "🚀 Начать диагностику")
 async def btn_new_diagnostic(message: Message, state: FSMContext, user=None):
     """Кнопка 'Новая диагностика' — начинает новый флоу."""
     # Очищаем состояние перед новой диагностикой
@@ -238,6 +240,14 @@ async def btn_new_diagnostic(message: Message, state: FSMContext, user=None):
     # Определяем пользователя (если вызов из колбэка, message.from_user может быть ботом)
     target_user = user or message.from_user
     first_name = target_user.first_name if target_user else "друг"
+
+    # Отменяем все старые напоминания
+    try:
+        async with get_session() as db:
+            await cancel_all_user_reminders(db, target_user.id)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to cancel reminders in btn_new_diagnostic: {e}")
 
     # Сразу показываем выбор цели (как для новых пользователей)
     await message.answer(
@@ -307,6 +317,10 @@ async def process_goal(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("role:"))
 async def process_role(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора роли."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     role = callback.data.split(":")[1]
     role_name = "Дизайнер" if role == "designer" else "Продакт-менеджер"
 
@@ -389,117 +403,129 @@ RETURNING_USER_TEXT = """
 @router.callback_query(F.data.startswith("exp:"))
 async def process_experience(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора опыта."""
-    # Проверка сессии (так как зависит от выбора роли)
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    # Prevent double-clicking race condition
     data = await state.get_data()
-    if "role" not in data:
-        await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
-        await btn_new_diagnostic(callback.message, state, user=callback.from_user)
+    if data.get("processing_exp"):
         return
+    await state.update_data(processing_exp=True)
 
-    exp_map = {
-        "junior": "до 1 года",
-        "middle": "1-3 года",
-        "senior": "3-5 лет",
-        "lead": "5+ лет",
-    }
+    try:
+        # Проверка сессии (так как зависит от выбора роли)
+        if "role" not in data:
+            await callback.answer("Сессия истекла. Начни заново.", show_alert=True)
+            await btn_new_diagnostic(callback.message, state, user=callback.from_user)
+            return
 
-    exp_key = callback.data.split(":")[1]
-    exp_value = exp_map[exp_key]
+        exp_map = {
+            "junior": "до 1 года",
+            "middle": "1-3 года",
+            "senior": "3-5 лет",
+            "lead": "5+ лет",
+        }
 
-    await state.update_data(experience=exp_key, experience_name=exp_value)
+        exp_key = callback.data.split(":")[1]
+        exp_value = exp_map[exp_key]
 
-    data = await state.get_data()
-    db_user_id = data.get("db_user_id")
-    is_returning_user = False
-    last_score = None
+        await state.update_data(experience=exp_key, experience_name=exp_value)
 
-    # ==================== ПРОВЕРКА ДОСТУПА ====================
-    if db_user_id:
-        try:
-            async with get_session() as db:
-                access = await balance_repo.check_diagnostic_access(db, db_user_id)
+        data = await state.get_data()
+        db_user_id = data.get("db_user_id")
+        is_returning_user = False
+        last_score = None
 
-                if not access.allowed:
-                    # Нет доступа — показываем paywall
-                    await callback.message.edit_text(
-                        "🔒 <b>Нет доступных диагностик</b>\n\n"
-                        f"✅ Роль: <b>{data['role_name']}</b>\n"
-                        f"✅ Опыт: <b>{exp_value}</b>\n\n"
-                        "━━━━━━━━━━━━━━━━━━━━\n\n"
-                        f"Баланс: <b>{access.balance}</b> диагностик\n"
-                        f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
-                        "Купи диагностику, чтобы продолжить!",
-                        reply_markup=get_paywall_keyboard(),
+        # ==================== ПРОВЕРКА ДОСТУПА ====================
+        if db_user_id:
+            try:
+                async with get_session() as db:
+                    access = await balance_repo.check_diagnostic_access(db, db_user_id)
+
+                    if not access.allowed:
+                        # Нет доступа — показываем paywall
+                        await callback.message.edit_text(
+                            "🔒 <b>Нет доступных диагностик</b>\n\n"
+                            f"✅ Роль: <b>{data['role_name']}</b>\n"
+                            f"✅ Опыт: <b>{exp_value}</b>\n\n"
+                            "━━━━━━━━━━━━━━━━━━━━\n\n"
+                            f"Баланс: <b>{access.balance}</b> диагностик\n"
+                            f"Демо: {'✅ использовано' if access.demo_used else '🆓 доступно'}\n\n"
+                            "Купи диагностику, чтобы продолжить!",
+                            reply_markup=get_paywall_keyboard(),
+                        )
+                        await callback.answer("Нужна подписка", show_alert=True)
+                        return
+
+                    # Сохраняем информацию о доступе
+                    await state.update_data(
+                        access_mode=access.mode,  # "demo" или "full"
+                        access_balance=access.balance,
                     )
-                    await callback.answer("Нужна подписка", show_alert=True)
-                    return
 
-                # Сохраняем информацию о доступе
-                await state.update_data(
-                    access_mode=access.mode,  # "demo" или "full"
-                    access_balance=access.balance,
-                )
+                    # Проверяем историю (returning user)
+                    past_sessions = await get_user_sessions(db, db_user_id, limit=5)
+                    completed = [s for s in past_sessions if s.status == "completed"]
+                    if completed:
+                        is_returning_user = True
+                        last_score = completed[0].total_score
 
-                # Проверяем историю (returning user)
-                past_sessions = await get_user_sessions(db, db_user_id, limit=5)
-                completed = [s for s in past_sessions if s.status == "completed"]
-                if completed:
-                    is_returning_user = True
-                    last_score = completed[0].total_score
+            except Exception as e:
+                logger.error(f"Failed to check access: {e}")
 
-        except Exception as e:
-            logger.error(f"Failed to check access: {e}")
+        # Для возвращающихся — сокращённый онбординг
+        if is_returning_user:
+            first_name = callback.from_user.first_name or "друг"
+            stats_line = ""
+            if last_score:
+                stats_line = f"В прошлый раз ты набрал <b>{last_score}/100</b>."
 
-    # Для возвращающихся — сокращённый онбординг
-    if is_returning_user:
-        first_name = callback.from_user.first_name or "друг"
-        stats_line = ""
-        if last_score:
-            stats_line = f"В прошлый раз ты набрал <b>{last_score}/100</b>."
+            await callback.message.edit_text(
+                RETURNING_USER_TEXT.format(
+                    first_name=first_name,
+                    stats_line=stats_line,
+                ),
+                reply_markup=get_returning_user_keyboard(),
+            )
+            await state.set_state(DiagnosticStates.onboarding)
+            return
+
+        # Для новых — Progressive Onboarding (Step 1) с контекстом
+        role = data.get("role", "designer")
+        experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
+        question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
+
+        # Определяем режим диагностики
+        access_mode = data.get("access_mode", "full")
+        if access_mode == "demo":
+            mode_info = "\n🆓 <b>Режим: ДЕМО (бесплатно)</b>"
+            questions_count = "3 вопроса"
+            time_estimate = "~5 минут"
+        else:
+            mode_info = "\n💎 <b>Режим: ПОЛНАЯ диагностика</b>"
+            questions_count = "10 вопросов"
+            time_estimate = "~15 минут"
+
+        onboarding = ONBOARDING_STEP1.format(
+            role_name=data["role_name"],
+            exp_value=exp_value,
+            mode_info=mode_info,
+            experience_tip=experience_tip,
+            question_topics=question_topics,
+            questions_count=questions_count,
+            time_estimate=time_estimate,
+        )
 
         await callback.message.edit_text(
-            RETURNING_USER_TEXT.format(
-                first_name=first_name,
-                stats_line=stats_line,
-            ),
-            reply_markup=get_returning_user_keyboard(),
+            onboarding,
+            reply_markup=get_onboarding_keyboard(),
         )
         await state.set_state(DiagnosticStates.onboarding)
-        await callback.answer()
-        return
 
-    # Для новых — Progressive Onboarding (Step 1) с контекстом
-    role = data.get("role", "designer")
-    experience_tip = EXPERIENCE_TIPS.get(exp_key, "")
-    question_topics = QUESTION_TOPICS.get(role, "проекты, решения, рост")
-
-    # Определяем режим диагностики
-    access_mode = data.get("access_mode", "full")
-    if access_mode == "demo":
-        mode_info = "\n🆓 <b>Режим: ДЕМО (бесплатно)</b>"
-        questions_count = "3 вопроса"
-        time_estimate = "~5 минут"
-    else:
-        mode_info = "\n💎 <b>Режим: ПОЛНАЯ диагностика</b>"
-        questions_count = "10 вопросов"
-        time_estimate = "~15 минут"
-
-    onboarding = ONBOARDING_STEP1.format(
-        role_name=data["role_name"],
-        exp_value=exp_value,
-        mode_info=mode_info,
-        experience_tip=experience_tip,
-        question_topics=question_topics,
-        questions_count=questions_count,
-        time_estimate=time_estimate,
-    )
-
-    await callback.message.edit_text(
-        onboarding,
-        reply_markup=get_onboarding_keyboard(),
-    )
-    await state.set_state(DiagnosticStates.onboarding)
-    await callback.answer()
+    finally:
+        await state.update_data(processing_exp=False)
 
 
 @router.callback_query(F.data == "onboarding_step2")
@@ -522,6 +548,11 @@ async def process_onboarding_step2(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "onboarding_done")
 async def process_onboarding_done(callback: CallbackQuery, state: FSMContext):
     """Завершение онбординга и переход к диагностике."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     data = await state.get_data()
 
     # Проверка на наличие сессии
@@ -678,6 +709,11 @@ async def process_restart(callback: CallbackQuery, state: FSMContext):
 )
 async def continue_session(callback: CallbackQuery, state: FSMContext):
     """Продолжение незавершённой сессии."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     from src.db.repositories import get_session_by_id
     import time
 
@@ -780,6 +816,11 @@ async def continue_session(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "restart_fresh", DiagnosticStates.session_recovery)
 async def restart_fresh(callback: CallbackQuery, state: FSMContext):
     """Начать заново, игнорируя незавершённую сессию."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     from src.db.repositories import get_active_session
     from sqlalchemy import update
     from src.db.models import DiagnosticSession

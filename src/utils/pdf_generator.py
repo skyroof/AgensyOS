@@ -23,7 +23,7 @@ from reportlab.platypus import (
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.graphics.shapes import Drawing, Polygon, Circle, Line, String, Rect
+from reportlab.graphics.shapes import Drawing, Polygon, Circle, Line, String, Rect, Wedge
 from reportlab.graphics.charts.piecharts import Pie
 from reportlab.graphics import renderPDF
 
@@ -364,19 +364,26 @@ class ScoreCircle(Flowable):
         canvas.circle(cx, cy, radius, stroke=1, fill=0)
         
         # Прогресс-дуга
-        progress = self.score / self.max_score
+        if self.max_score > 0:
+            progress = self.score / self.max_score
+        else:
+            progress = 0
+            
         start_angle = 90  # Начинаем сверху
         extent = -360 * progress  # По часовой стрелке
         
         canvas.setStrokeColor(color)
         canvas.setLineWidth(12)
         # Рисуем дугу
-        from reportlab.graphics.shapes import Wedge
-        canvas.arc(
-            cx - radius, cy - radius,
-            cx + radius, cy + radius,
-            start_angle, extent
-        )
+        
+        if extent <= -360:
+             canvas.circle(cx, cy, radius, stroke=1, fill=0)
+        elif extent < 0:
+            canvas.arc(
+                cx - radius, cy - radius,
+                cx + radius, cy + radius,
+                start_angle, extent
+            )
         
         # Балл в центре
         canvas.setFillColor(Colors.TEXT_PRIMARY)
@@ -622,11 +629,15 @@ class TotalScoreWidget(Flowable):
         
         # Рисуем дугу (от 90° против часовой стрелки)
         angle = 360 * (self.score / 100)
-        canvas.arc(
-            cx - radius, cy - radius,
-            cx + radius, cy + radius,
-            90, -angle
-        )
+        
+        if angle >= 360:
+            canvas.circle(cx, cy, radius, stroke=1, fill=0)
+        elif angle > 0:
+            canvas.arc(
+                cx - radius, cy - radius,
+                cx + radius, cy + radius,
+                90, -angle
+            )
         
         # Балл в центре (с учетом baseline)
         canvas.setFillColor(Colors.TEXT_PRIMARY)
@@ -770,6 +781,27 @@ def _add_later_pages(canvas, doc):
     _add_page_number(canvas, doc)
 
 
+def format_list_items(text, icon="•", color="black"):
+    """Форматирует текст списка с иконками."""
+    import re
+    items = []
+    # Разбиваем по буллитам или новым строкам
+    raw_items = re.split(r'\n[-•]', text)
+    if len(raw_items) == 1:
+        raw_items = text.split("\n")
+    
+    for item in raw_items:
+        clean_item = item.strip()
+        if clean_item and clean_item != ".":
+            # Выделяем жирным текст до двоеточия (если есть)
+            if ":" in clean_item:
+                parts = clean_item.split(":", 1)
+                clean_item = f"<b>{parts[0]}:</b>{parts[1]}"
+            
+            items.append(f'<font color="{color}">{icon}</font> {clean_item}')
+    return "<br/><br/>".join(items)
+
+
 # ========================================
 # ОСНОВНОЙ ГЕНЕРАТОР
 # ========================================
@@ -834,6 +866,15 @@ def generate_pdf_report(
         fontSize=12,
         textColor=Colors.TEXT_SECONDARY,
         spaceAfter=20,
+    )
+    
+    intro_style = ParagraphStyle(
+        'Intro',
+        fontName=FONT_NAME,
+        fontSize=10,
+        textColor=Colors.TEXT_SECONDARY,
+        spaceAfter=12,
+        leading=14,
     )
     
     heading_style = ParagraphStyle(
@@ -901,7 +942,67 @@ def generate_pdf_report(
         level_emoji = "[J]"
     
     # ========================================
-    # СТРАНИЦА 1: ТИТУЛЬНАЯ
+    # СТРАНИЦА 0: PREMIUM COVER PAGE
+    # ========================================
+    
+    # Отступ сверху
+    elements.append(Spacer(1, 60*mm))
+    
+    # Заголовок
+    cover_title_style = ParagraphStyle(
+        'CoverTitle',
+        fontName=FONT_BOLD,
+        fontSize=42,
+        leading=50,
+        textColor=Colors.PRIMARY,
+        alignment=TA_CENTER,
+        spaceAfter=30,
+    )
+    elements.append(Paragraph("CAREER<br/>DIAGNOSTIC<br/>PROFILE", cover_title_style))
+    
+    # Декоративная линия
+    elements.append(SectionDivider(width=100*mm, style="gradient"))
+    elements.append(Spacer(1, 20*mm))
+    
+    # Имя кандидата
+    cover_name_style = ParagraphStyle(
+        'CoverName',
+        fontName=FONT_MEDIUM,
+        fontSize=24,
+        textColor=Colors.TEXT_PRIMARY,
+        alignment=TA_CENTER,
+        spaceAfter=10,
+    )
+    elements.append(Paragraph(user_name, cover_name_style))
+    
+    # Роль и опыт
+    cover_role_style = ParagraphStyle(
+        'CoverRole',
+        fontName=FONT_REGULAR,
+        fontSize=16,
+        textColor=Colors.TEXT_SECONDARY,
+        alignment=TA_CENTER,
+        spaceAfter=50,
+    )
+    elements.append(Paragraph(f"{role_name} • {experience}", cover_role_style))
+    
+    # Футер обложки
+    cover_footer_style = ParagraphStyle(
+        'CoverFooter',
+        fontName=FONT_REGULAR,
+        fontSize=12,
+        textColor=Colors.TEXT_MUTED,
+        alignment=TA_CENTER,
+    )
+    date_str = datetime.now().strftime('%B %Y').replace('January', 'Январь').replace('February', 'Февраль').replace('March', 'Март').replace('April', 'Апрель').replace('May', 'Май').replace('June', 'Июнь').replace('July', 'Июль').replace('August', 'Август').replace('September', 'Сентябрь').replace('October', 'Октябрь').replace('November', 'Ноябрь').replace('December', 'Декабрь')
+    
+    elements.append(Spacer(1, 40*mm))
+    elements.append(Paragraph(f"CONFIDENTIAL REPORT • {date_str}", cover_footer_style))
+    
+    elements.append(PageBreak())
+
+    # ========================================
+    # СТРАНИЦА 1: DASHBOARD (СВОДКА)
     # ========================================
     
     # Большой заголовок
@@ -1067,9 +1168,16 @@ def generate_pdf_report(
     # Бенчмарк (если есть)
     if benchmark_data:
         avg_score = benchmark_data.get("avg_score", 50)
+        percentile = benchmark_data.get("percentile", None)
+        
+        # Заголовок бенчмарка с перцентилем
+        label = "Ваш результат vs Среднее"
+        if percentile is not None:
+            label = f"Вы лучше {percentile:.0f}% кандидатов"
+            
         # Центрируем BenchmarkBar в таблице — большой размер
         benchmark_table = Table(
-            [[BenchmarkBar(total, avg_score, "Ваш результат vs средний", width=320, height=45)]],
+            [[BenchmarkBar(total, avg_score, label, width=320, height=45)]],
             colWidths=[180*mm]
         )
         benchmark_table.setStyle(TableStyle([
@@ -1082,6 +1190,126 @@ def generate_pdf_report(
     # СЕКЦИЯ: RADAR CHART КОМПЕТЕНЦИЙ (новая страница)
     # ========================================
     
+    # ========================================
+    # ПАРСИНГ ТЕКСТА ОТЧЁТА
+    # ========================================
+    
+    import re
+    
+    def extract_section(text, pattern):
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if match:
+            content = match.group(1).strip()
+            # Очистка от markdown заголовков внутри
+            content = re.sub(r'^\s*[\*\#]*\s*[\w\s]+\s*[\*\#]*\s*\n', '', content)
+            return content
+        return ""
+
+    # Паттерны для секций (поддержка HTML и Markdown заголовков)
+    sections = {
+        "impression": r"1\.\s*(?:<b>|\*\*|)?\s*ОБЩЕЕ ВПЕЧАТЛЕНИЕ\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n2\.)",
+        "strengths": r"2\.\s*(?:<b>|\*\*|)?\s*СИЛЬНЫЕ СТОРОНЫ\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n3\.)",
+        "gaps": r"3\.\s*(?:<b>|\*\*|)?\s*ЗОНЫ РАЗВИТИЯ\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n4\.)",
+        "hard": r"4\.\s*(?:<b>|\*\*|)?\s*HARD SKILLS\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n5\.)",
+        "soft": r"5\.\s*(?:<b>|\*\*|)?\s*SOFT SKILLS\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n6\.)",
+        "thinking": r"6\.\s*(?:<b>|\*\*|)?\s*МЫШЛЕНИЕ\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n7\.)",
+        "mindset": r"7\.\s*(?:<b>|\*\*|)?\s*MINDSET\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n8\.)",
+        "recommendations": r"8\.\s*(?:<b>|\*\*|)?\s*РЕКОМЕНДАЦИИ.*?\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=\n9\.)",
+        "verdict": r"9\.\s*(?:<b>|\*\*|)?\s*ИТОГОВЫЙ ВЕРДИКТ\s*(?:</b>|\*\*|)?[\s\S]*?\n(.*?)(?=$)",
+    }
+    
+    parsed = {}
+    for key, pattern in sections.items():
+        parsed[key] = extract_section(report_text, pattern)
+
+    # ========================================
+    # СЕКЦИЯ: EXECUTIVE SUMMARY
+    # ========================================
+    
+    if parsed.get("impression") or parsed.get("verdict"):
+        elements.append(PageBreak())
+        elements.append(Paragraph("EXECUTIVE SUMMARY", heading_style))
+        elements.append(SectionDivider(width=180*mm, style="gradient"))
+        elements.append(Spacer(1, 5*mm))
+        
+        # Общее впечатление (Lead Paragraph)
+        if parsed.get("impression"):
+            impression_style = ParagraphStyle(
+                'Impression',
+                parent=body_style,
+                fontSize=10,
+                leading=14,
+                textColor=Colors.TEXT_PRIMARY,
+                spaceAfter=15,
+                firstLineIndent=0,
+            )
+            # Добавляем декоративную черту слева
+            impression_table = Table(
+                [[
+                    Rect(0, 0, 3, 30, fillColor=Colors.ACCENT, strokeColor=None),
+                    Paragraph(parsed["impression"], impression_style)
+                ]],
+                colWidths=[5*mm, 170*mm]
+            )
+            impression_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            elements.append(impression_table)
+            elements.append(Spacer(1, 8*mm))
+        
+        # Сильные стороны и зоны развития (в 2 колонки)
+            if parsed.get("strengths") and parsed.get("gaps"):
+                strengths_html = format_list_items(parsed["strengths"], "✚", Colors.EXCELLENT.hexval())
+                gaps_html = format_list_items(parsed["gaps"], "▲", Colors.AVERAGE.hexval())
+                
+                col_style = ParagraphStyle('Col', parent=body_style, leading=14)
+            
+            # Заголовки колонок
+            s_header = Paragraph(f'<font color="{Colors.EXCELLENT.hexval()}">TOP STRENGTHS</font>', subheading_style)
+            g_header = Paragraph(f'<font color="{Colors.AVERAGE.hexval()}">GROWTH AREAS</font>', subheading_style)
+            
+            s_col = [s_header, Paragraph(strengths_html, col_style)]
+            g_col = [g_header, Paragraph(gaps_html, col_style)]
+            
+            cols_table = Table([[s_col, g_col]], colWidths=[85*mm, 85*mm])
+            cols_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (0, 0), 0),
+                ('RIGHTPADDING', (1, 0), (1, 0), 0),
+                ('LINEAFTER', (0, 0), (0, -1), 0.5, Colors.BORDER), # Разделитель между колонками
+                ('RIGHTPADDING', (0, 0), (0, -1), 10),
+                ('LEFTPADDING', (1, 0), (1, -1), 10),
+            ]))
+            elements.append(cols_table)
+            elements.append(Spacer(1, 8*mm))
+            
+        # Вердикт (выделенный блок)
+        if parsed.get("verdict"):
+            elements.append(Spacer(1, 5*mm))
+            verdict_content = [
+                [Paragraph("ИТОГОВЫЙ ВЕРДИКТ", subheading_style)],
+                [Paragraph(parsed['verdict'], body_style)]
+            ]
+            
+            verdict_table = Table(
+                verdict_content,
+                colWidths=[160*mm]
+            )
+            verdict_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), Colors.LIGHT_BG),
+                ('BOX', (0, 0), (-1, -1), 1, Colors.PRIMARY),
+                ('ROUNDEDCORNERS', [5, 5, 5, 5]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 15),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 15),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ]))
+            elements.append(verdict_table)
+
+    # ========================================
+    # СЕКЦИЯ: RADAR CHART КОМПЕТЕНЦИЙ
+    # ========================================
+
     if raw_averages:
         elements.append(PageBreak())
         elements.append(Paragraph("КАРТА КОМПЕТЕНЦИЙ", heading_style))
@@ -1114,7 +1342,13 @@ def generate_pdf_report(
         # Создаем легенду с группировкой
         legend_rows = []
         for group_name, group_color, metrics in metrics_groups:
-            for i, (name, value) in enumerate(metrics):
+            # Заголовок группы
+            legend_rows.append([
+                Paragraph(f"<b>{group_name}</b>", 
+                         ParagraphStyle('GroupTitle', fontName=FONT_BOLD, fontSize=10, textColor=group_color))
+            ])
+            
+            for name, value in metrics:
                 # Цвет точки по значению
                 if value >= 7:
                     dot_color = Colors.EXCELLENT
@@ -1127,376 +1361,217 @@ def generate_pdf_report(
                     f'Metric_{name}',
                     fontName=FONT_NAME,
                     fontSize=9,
-                    textColor=Colors.TEXT_PRIMARY,
+                    textColor=Colors.TEXT_PRIMARY
                 )
-                value_style = ParagraphStyle(
-                    f'Value_{name}',
-                    fontName=FONT_BOLD,
-                    fontSize=10,
-                    textColor=dot_color,
-                    alignment=TA_RIGHT,
-                )
+                
+                # Строка легенды: Точка + Имя + Значение
+                dot_drawing = Drawing(6, 6)
+                dot_drawing.add(Circle(3, 3, 3, fillColor=dot_color, strokeColor=None))
+                
                 legend_rows.append([
-                    Paragraph(name, metric_style),
-                    Paragraph(f"<b>{value:.1f}</b>", value_style),
+                    Table(
+                        [[
+                            dot_drawing,
+                            Paragraph(name, metric_style),
+                            Paragraph(f"<b>{value:.1f}</b>", metric_style)
+                        ]],
+                        colWidths=[4*mm, 35*mm, 10*mm]
+                    )
                 ])
-            # Разделитель между группами
-            if group_name != "Mindset":
-                legend_rows.append([Spacer(1, 4), Spacer(1, 4)])
+            
+            legend_rows.append([Spacer(1, 3*mm)])
+
+        # Компоновка Radar Chart и Легенды
+        chart = RadarChart(raw_averages, width=280, height=280)
         
-        legend_table = Table(legend_rows, colWidths=[55*mm, 15*mm])
-        legend_table.setStyle(TableStyle([
+        # Легенда в 2 колонки
+        legend_table_left = Table(legend_rows[:len(legend_rows)//2 + 2], colWidths=[55*mm])
+        legend_table_right = Table(legend_rows[len(legend_rows)//2 + 2:], colWidths=[55*mm])
+        
+        legend_container = Table([[legend_table_left, legend_table_right]], colWidths=[60*mm, 60*mm])
+        legend_container.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
+        
+        # Общая таблица: Чарт слева, Легенда справа
+        main_chart_table = Table([[chart, legend_container]], colWidths=[100*mm, 120*mm])
+        main_chart_table.setStyle(TableStyle([
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('TOPPADDING', (0, 0), (-1, -1), 2),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ('ALIGN', (0, 0), (0, 0), 'CENTER'),
         ]))
         
-        # Radar chart + легенда в одной таблице, центрировано
-        radar_section = Table(
-            [[RadarChart(raw_averages, width=180, height=180), legend_table]],
-            colWidths=[95*mm, 75*mm]
-        )
-        radar_section.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 5),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ]))
-        
-        # Центрируем всю секцию
-        centered_radar = Table([[radar_section]], colWidths=[180*mm])
-        centered_radar.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ]))
-        elements.append(centered_radar)
+        elements.append(main_chart_table)
         elements.append(Spacer(1, 10*mm))
-    
+
     # ========================================
-    # СЕКЦИЯ: ПРОФИЛЬ КОМПЕТЕНЦИЙ
+    # СЕКЦИЯ: DETAILED BREAKDOWN
     # ========================================
     
-    if profile_data:
-        elements.append(Paragraph("ПРОФИЛЬ КОМПЕТЕНЦИЙ", heading_style))
-        elements.append(Spacer(1, 8*mm))
-        
-        # Две колонки: сильные стороны + зоны роста
-        strengths = profile_data.get("strengths", [])
-        growth = profile_data.get("growth_areas", [])
-        
-        col1_content = []
-        col2_content = []
-        
-        col1_content.append(Paragraph("<b>[+] Сильные стороны</b>", subheading_style))
-        for s in strengths[:3]:
-            col1_content.append(Paragraph(f"• {s}", body_style))
-        
-        col2_content.append(Paragraph("<b>[-] Зоны развития</b>", subheading_style))
-        for g in growth[:3]:
-            col2_content.append(Paragraph(f"• {g}", body_style))
-        
-        profile_cols = Table(
-            [[col1_content, col2_content]],
-            colWidths=[80*mm, 80*mm]
-        )
-        profile_cols.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 10),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-        ]))
-        
-        # Центрируем колонки в контейнере
-        centered_profile = Table([[profile_cols]], colWidths=[180*mm])
-        centered_profile.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 10),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-        ]))
-        elements.append(centered_profile)
-        elements.append(Spacer(1, 8*mm))
-        
-        # Разделитель
-        elements.append(SectionDivider(width=180*mm, style="line"))
+    elements.append(PageBreak())
+    elements.append(Paragraph("ДЕТАЛЬНЫЙ АНАЛИЗ", heading_style))
+    elements.append(SectionDivider(width=180*mm, style="gradient"))
+    elements.append(Spacer(1, 5*mm))
+    
+    details_map = [
+        ("HARD SKILLS", "hard_skills", parsed.get("hard"), Colors.HARD_SKILLS, 30),
+        ("SOFT SKILLS", "soft_skills", parsed.get("soft"), Colors.SOFT_SKILLS, 25),
+        ("THINKING", "thinking", parsed.get("thinking"), Colors.THINKING, 25),
+        ("MINDSET", "mindset", parsed.get("mindset"), Colors.MINDSET, 20),
+    ]
+    
+    for title, key, content, color, max_score in details_map:
+        if content:
+            # Получаем балл пользователя
+            user_score = scores.get(key, 0)
+            
+            # Заголовок секции с баллом
+            # Используем таблицу для выравнивания: Цветная полоска | Название ......... Балл/Макс
+            
+            header_text = f'{title}'
+            score_text = f'<font color="{color.hexval()}"><b>{user_score}</b></font> <font color="{Colors.TEXT_SECONDARY.hexval()}" size="8">/ {max_score}</font>'
+            
+            # Стиль заголовка секции
+            section_header_style = ParagraphStyle(
+                'SectionHeader',
+                parent=subheading_style,
+                fontSize=12,
+                spaceBefore=0,
+                spaceAfter=0,
+            )
+            
+            score_style = ParagraphStyle(
+                'SectionScore',
+                parent=subheading_style,
+                fontSize=12,
+                alignment=TA_RIGHT,
+                spaceBefore=0,
+                spaceAfter=0,
+            )
+            
+            header_table = Table(
+                [[
+                    Rect(0, 0, 4, 14, fillColor=color, strokeColor=None), # Цветной маркер
+                    Paragraph(header_text, section_header_style),         # Название
+                    Paragraph(score_text, score_style)                    # Балл
+                ]],
+                colWidths=[6*mm, 130*mm, 40*mm],
+                style=TableStyle([
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('LEFTPADDING', (0, 0), (0, 0), 0),
+                    ('RIGHTPADDING', (-1, 0), (-1, 0), 0),
+                ])
+            )
+            elements.append(header_table)
+            elements.append(Spacer(1, 3*mm))
+            
+            # Контент секции
+            # Если текст содержит списки, форматируем их
+            if "•" in content or "-" in content:
+                formatted_content = format_list_items(content, "▪", Colors.TEXT_PRIMARY.hexval())
+                elements.append(Paragraph(formatted_content, body_style))
+            else:
+                # Просто текст
+                elements.append(Paragraph(content, body_style))
+                
+            elements.append(Spacer(1, 6*mm))
+
+    # ========================================
+    # СЕКЦИЯ: ACTION PLAN
+    # ========================================
+    
+    if parsed.get("recommendations"):
+        elements.append(PageBreak())
+        elements.append(Paragraph("ACTION PLAN", heading_style))
+        elements.append(Paragraph("Рекомендации по развитию карьеры", subtitle_style))
         elements.append(Spacer(1, 5*mm))
         
-        # Стили мышления
-        thinking_style = profile_data.get("thinking_style", "")
-        comm_style = profile_data.get("communication_style", "")
-        
-        if thinking_style or comm_style:
-            styles_data = []
-            if thinking_style:
-                styles_data.append(["Стиль мышления:", Paragraph(thinking_style, body_style)])
-            if comm_style:
-                styles_data.append(["Коммуникация:", Paragraph(comm_style, body_style)])
+        # Парсим рекомендации на пункты
+        recs = re.split(r'\n\d+\.', parsed["recommendations"])
+        if len(recs) == 1:
+            recs = parsed["recommendations"].split("\n-")
             
-            styles_table = Table(styles_data, colWidths=[40*mm, 110*mm])
-            styles_table.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (0, -1), FONT_BOLD),
-                ('FONTNAME', (1, 0), (1, -1), FONT_NAME),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('TEXTCOLOR', (0, 0), (-1, -1), Colors.TEXT_PRIMARY),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('TOPPADDING', (0, 0), (-1, -1), 4),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ]))
+        for rec in recs:
+            rec = rec.strip()
+            if not rec: continue
             
-            # Центрируем таблицу стилей
-            centered_styles = Table([[styles_table]], colWidths=[180*mm])
-            centered_styles.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            # Чекбокс + Текст
+            checkbox = Table(
+                [[
+                    Rect(0, 0, 12, 12, fillColor=None, strokeColor=Colors.TEXT_MUTED, strokeWidth=1),
+                    Paragraph(rec, body_style)
+                ]],
+                colWidths=[10*mm, 160*mm]
+            )
+            checkbox.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 2),
             ]))
-            elements.append(centered_styles)
-    
-    # ========================================
-    # СТРАНИЦЫ 2-3: ДЕТАЛЬНЫЙ АНАЛИЗ ПО КАТЕГОРИЯМ
-    # ========================================
+            elements.append(checkbox)
+            elements.append(Spacer(1, 3*mm))
+            
+    # Словарь деталей метрик для Action Plan
+    metric_details = {
+        "expertise": {
+            "name": "Экспертиза",
+            "desc": "Глубина профессиональных знаний и навыков",
+            "how_to_use": "Используйте свои знания для менторства младших коллег. Пишите статьи, выступайте экспертом.",
+        },
+        "methodology": {
+            "name": "Методология",
+            "desc": "Знание и применение рабочих фреймворков",
+            "how_to_use": "Структурируйте хаос в процессах. Внедряйте лучшие практики в команду.",
+        },
+        "tools_proficiency": {
+            "name": "Инструменты",
+            "desc": "Владение профессиональным софтом",
+            "how_to_use": "Автоматизируйте рутину. Обучайте коллег эффективным приемам работы.",
+        },
+        "articulation": {
+            "name": "Коммуникация",
+            "desc": "Ясность и четкость изложения мыслей",
+            "how_to_use": "Берите на себя презентации и переговоры. Выступайте фасилитатором встреч.",
+        },
+        "self_awareness": {
+            "name": "Самосознание",
+            "desc": "Понимание своих эмоций и влияния на других",
+            "how_to_use": "Используйте эмпатию для разрешения конфликтов. Давайте качественную обратную связь.",
+        },
+        "conflict_handling": {
+            "name": "Конфликты",
+            "desc": "Умение конструктивно решать споры",
+            "how_to_use": "Выступайте медиатором в спорах. Переводите конфликты в конструктивное русло.",
+        },
+        "depth": {
+            "name": "Глубина",
+            "desc": "Способность докапываться до сути проблем",
+            "how_to_use": "Решайте самые сложные, запутанные задачи. Проводите root cause analysis.",
+        },
+        "structure": {
+            "name": "Структура",
+            "desc": "Системный подход и упорядоченность",
+            "how_to_use": "Создавайте планы проектов, дорожные карты. Организуйте базу знаний.",
+        },
+        "systems_thinking": {
+            "name": "Системность",
+            "desc": "Видение взаимосвязей и общей картины",
+            "how_to_use": "Прогнозируйте риски. Оптимизируйте архитектуру процессов целиком.",
+        },
+        "creativity": {
+            "name": "Креативность",
+            "desc": "Генерация нестандартных решений",
+            "how_to_use": "Предлагайте инновационные решения. Участвуйте в брейнштормах, генерируйте гипотезы.",
+        },
+        "honesty": {
+            "name": "Честность",
+            "desc": "Искренность и аутентичность в коммуникации",
+            "how_to_use": "Давайте честный фидбек. Признавайте ошибки первым — это строит доверие.",
+        },
+        "growth_orientation": {
+            "name": "Ориентация на рост",
+            "desc": "Стремление к развитию и обучению",
+            "how_to_use": "Ставьте stretch goals. Ищите возможности выйти из зоны комфорта.",
+        },
+    }
     
     if raw_averages:
-        elements.append(PageBreak())
-        elements.append(Paragraph("АНАЛИЗ ПО КАТЕГОРИЯМ", heading_style))
-        
-        # Определяем метрики для каждой категории
-        category_metrics = {
-            "hard_skills": {
-                "title": "Hard Skills",
-                "subtitle": "Профессиональные навыки",
-                "color": Colors.HARD_SKILLS,
-                "icon": "[HS]",
-                "max_score": 30,
-                "metrics": ["expertise", "methodology", "tools_proficiency"],
-                "descriptions": {
-                    "expertise": "Глубина знаний в своей области, экспертиза",
-                    "methodology": "Владение фреймворками и процессами",
-                    "tools_proficiency": "Практическое владение инструментарием",
-                },
-                "insights": "Показывает уровень технической подготовки и практического опыта в профессии."
-            },
-            "soft_skills": {
-                "title": "Soft Skills", 
-                "subtitle": "Коммуникация и взаимодействие",
-                "color": Colors.SOFT_SKILLS,
-                "icon": "[SS]",
-                "max_score": 25,
-                "metrics": ["articulation", "self_awareness", "conflict_handling"],
-                "descriptions": {
-                    "articulation": "Ясность и структурность изложения мыслей",
-                    "self_awareness": "Понимание своих сильных и слабых сторон",
-                    "conflict_handling": "Умение находить компромиссы и решать конфликты",
-                },
-                "insights": "Отражает способность эффективно взаимодействовать с командой и стейкхолдерами."
-            },
-            "thinking": {
-                "title": "Thinking",
-                "subtitle": "Мышление и анализ",
-                "color": Colors.THINKING,
-                "icon": "[TH]",
-                "max_score": 25,
-                "metrics": ["depth", "structure", "systems_thinking", "creativity"],
-                "descriptions": {
-                    "depth": "Способность к глубокому анализу проблем",
-                    "structure": "Логичность и последовательность рассуждений",
-                    "systems_thinking": "Видение связей и закономерностей",
-                    "creativity": "Нестандартные подходы к решению задач",
-                },
-                "insights": "Демонстрирует качество принятия решений и способность к стратегическому мышлению."
-            },
-            "mindset": {
-                "title": "Mindset",
-                "subtitle": "Установки и ценности",
-                "color": Colors.MINDSET,
-                "icon": "[MS]",
-                "max_score": 20,
-                "metrics": ["honesty", "growth_orientation"],
-                "descriptions": {
-                    "honesty": "Искренность и аутентичность в ответах",
-                    "growth_orientation": "Стремление к развитию и обучению",
-                },
-                "insights": "Характеризует профессиональную зрелость и потенциал роста."
-            },
-        }
-        
-        metric_names = {
-            "expertise": "Экспертиза",
-            "methodology": "Методология", 
-            "tools_proficiency": "Инструменты",
-            "articulation": "Коммуникация",
-            "self_awareness": "Самосознание",
-            "conflict_handling": "Конфликты",
-            "depth": "Глубина",
-            "structure": "Структура",
-            "systems_thinking": "Системность",
-            "creativity": "Креативность",
-            "honesty": "Честность",
-            "growth_orientation": "Рост",
-        }
-        
-        # Генерируем карточки для каждой категории
-        for cat_key, cat_info in category_metrics.items():
-            cat_score = scores.get(cat_key, 0)
-            
-            # Заголовок категории — по центру
-            cat_header_style = ParagraphStyle(
-                f'CatHeader_{cat_key}',
-                fontName=FONT_BOLD,
-                fontSize=12,
-                textColor=cat_info["color"],
-                spaceBefore=8,
-                spaceAfter=2,
-                alignment=TA_CENTER,
-            )
-            
-            elements.append(Paragraph(
-                f'{cat_info["icon"]} {cat_info["title"]} — {cat_info["subtitle"]}',
-                cat_header_style
-            ))
-            
-            # Балл категории — по центру
-            cat_score_style = ParagraphStyle(
-                f'CatScore_{cat_key}',
-                fontName=FONT_SEMIBOLD,
-                fontSize=10,
-                textColor=Colors.TEXT_PRIMARY,
-                spaceAfter=4,
-                alignment=TA_CENTER,
-            )
-            elements.append(Paragraph(
-                f'<b>{cat_score}</b> из {cat_info["max_score"]} баллов',
-                cat_score_style
-            ))
-            
-            # Метрики категории — с явными отступами слева и справа
-            metrics_rows = []
-            for m_key in cat_info["metrics"]:
-                m_value = raw_averages.get(m_key, 5.0)
-                m_name = metric_names.get(m_key, m_key)
-                
-                name_style = ParagraphStyle(
-                    f'MetricName_{m_key}',
-                    fontName=FONT_BOLD,
-                    fontSize=10,
-                    textColor=Colors.TEXT_PRIMARY,
-                )
-                # 3 колонки: [пустая] [название] [прогресс]
-                metrics_rows.append([
-                    '',  # Пустая колонка слева
-                    Paragraph(m_name, name_style),
-                    ProgressBar(m_value, 10, width=90, height=14, color=cat_info["color"], show_value=True),
-                ])
-            
-            metrics_table = Table(
-                metrics_rows,
-                colWidths=[30*mm, 45*mm, 105*mm],
-            )
-            metrics_table.setStyle(TableStyle([
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('TOPPADDING', (0, 0), (-1, -1), 4),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ]))
-            elements.append(metrics_table)
-            
-            # Инсайт — по центру
-            insight_style = ParagraphStyle(
-                f'Insight_{cat_key}',
-                fontName=FONT_NAME,
-                fontSize=8,
-                textColor=Colors.TEXT_SECONDARY,
-                spaceAfter=6,
-                alignment=TA_CENTER,
-            )
-            elements.append(Paragraph(f'> {cat_info["insights"]}', insight_style))
-            
-            # Разделитель (кроме последней категории)
-            if cat_key != "mindset":
-                elements.append(Spacer(1, 3*mm))
-                elements.append(SectionDivider(width=180*mm, style="line"))
-                elements.append(Spacer(1, 3*mm))
-    
-    # ========================================
-    # СТРАНИЦА: СИЛЬНЫЕ СТОРОНЫ (S5)
-    # ========================================
-    
-    if raw_averages:
-        elements.append(PageBreak())
-        elements.append(Paragraph("СИЛЬНЫЕ СТОРОНЫ", heading_style))
-        
-        intro_style = ParagraphStyle(
-            'StrengthsIntro',
-            fontName=FONT_NAME,
-            fontSize=9,
-            textColor=Colors.TEXT_SECONDARY,
-            spaceAfter=10,
-        )
-        elements.append(Paragraph(
-            "Ваши топ-5 компетенций, которые можно использовать как конкурентное преимущество.",
-            intro_style
-        ))
-        
-        # Расширенные описания метрик
-        metric_details = {
-            "expertise": {
-                "name": "Экспертиза",
-                "desc": "Глубокие знания в профессиональной области",
-                "how_to_use": "Станьте go-to person в команде по сложным вопросам. Делитесь знаниями через менторинг или внутренние митапы.",
-            },
-            "methodology": {
-                "name": "Методология",
-                "desc": "Владение фреймворками, процессами и best practices",
-                "how_to_use": "Внедряйте стандарты в команде, участвуйте в ревью процессов, предлагайте улучшения.",
-            },
-            "tools_proficiency": {
-                "name": "Инструменты",
-                "desc": "Практическое владение профессиональным инструментарием",
-                "how_to_use": "Автоматизируйте рутину, обучайте коллег эффективным workflows, экспериментируйте с новыми тулами.",
-            },
-            "articulation": {
-                "name": "Коммуникация",
-                "desc": "Ясность и структурность изложения мыслей",
-                "how_to_use": "Берите на себя презентации и защиту идей перед стейкхолдерами. Пишите документацию.",
-            },
-            "self_awareness": {
-                "name": "Самосознание",
-                "desc": "Понимание своих сильных и слабых сторон",
-                "how_to_use": "Используйте рефлексию для роста. Запрашивайте фидбек и адаптируйте подход.",
-            },
-            "conflict_handling": {
-                "name": "Решение конфликтов",
-                "desc": "Умение находить компромиссы и сглаживать разногласия",
-                "how_to_use": "Выступайте медиатором в спорах. Помогайте команде находить win-win решения.",
-            },
-            "depth": {
-                "name": "Глубина мышления",
-                "desc": "Способность к детальному анализу проблем",
-                "how_to_use": "Беритесь за сложные задачи, где нужен глубокий анализ. Проводите root cause analysis.",
-            },
-            "structure": {
-                "name": "Структурность",
-                "desc": "Логичность и последовательность рассуждений",
-                "how_to_use": "Структурируйте хаос: создавайте планы, декомпозируйте задачи, организуйте информацию.",
-            },
-            "systems_thinking": {
-                "name": "Системное мышление",
-                "desc": "Видение связей и закономерностей в сложных системах",
-                "how_to_use": "Участвуйте в архитектурных решениях. Анализируйте последствия изменений на всю систему.",
-            },
-            "creativity": {
-                "name": "Креативность",
-                "desc": "Нестандартные подходы к решению задач",
-                "how_to_use": "Предлагайте инновационные решения. Участвуйте в брейнштормах, генерируйте гипотезы.",
-            },
-            "honesty": {
-                "name": "Честность",
-                "desc": "Искренность и аутентичность в коммуникации",
-                "how_to_use": "Давайте честный фидбек. Признавайте ошибки первым — это строит доверие.",
-            },
-            "growth_orientation": {
-                "name": "Ориентация на рост",
-                "desc": "Стремление к развитию и обучению",
-                "how_to_use": "Ставьте stretch goals. Ищите возможности выйти из зоны комфорта.",
-            },
-        }
-        
         # Топ-5 сильных метрик
         sorted_metrics = sorted(raw_averages.items(), key=lambda x: x[1], reverse=True)
         top_5 = sorted_metrics[:5]
@@ -1798,61 +1873,132 @@ def generate_pdf_report(
             
         elements.append(SectionDivider(width=180*mm, style="dots"))
         
-        # План на 30 дней — по неделям
+        # План на 30 дней — по неделям (Сетка 2x2)
         plan_30 = pdp_data.get("plan_30_days", [])
         if plan_30:
             elements.append(Paragraph("ПЛАН ПО НЕДЕЛЯМ", subheading_style))
             
             week_colors = [Colors.HARD_SKILLS, Colors.SOFT_SKILLS, Colors.THINKING, Colors.MINDSET]
-            items_per_week = max(1, len(plan_30) // 4) if len(plan_30) >= 4 else 1
+            
+            # Подготовка данных для таблицы (2 колонки)
+            week_cells = []
+            
+            # Pre-calculate for List mode
+            items_per_week = 1
+            if isinstance(plan_30, list):
+                items_per_week = max(1, len(plan_30) // 4) if len(plan_30) >= 4 else 1
             
             for week_num in range(4):
-                start_idx = week_num * items_per_week
-                end_idx = start_idx + items_per_week
-                week_items = plan_30[start_idx:end_idx] if start_idx < len(plan_30) else []
+                week_items = []
+                if isinstance(plan_30, dict):
+                    # Dict mode: Try keys "Week 1", "Week 2" etc.
+                    key = f"Week {week_num + 1}"
+                    week_items = plan_30.get(key, [])
+                    # Fallback: try numeric keys
+                    if not week_items:
+                        week_items = plan_30.get(week_num + 1, [])
+                else:
+                    # List mode: Chunking
+                    start_idx = week_num * items_per_week
+                    end_idx = start_idx + items_per_week
+                    # Если это последняя неделя, берем все оставшиеся
+                    if week_num == 3:
+                        week_items = plan_30[start_idx:]
+                    else:
+                        week_items = plan_30[start_idx:end_idx] if start_idx < len(plan_30) else []
                 
-                if week_items or week_num == 0:
-                    week_color = week_colors[week_num]
-                    week_header = ParagraphStyle(
+                week_color = week_colors[week_num]
+                
+                # Контент ячейки недели
+                cell_content = []
+                
+                # Заголовок недели
+                week_header = Paragraph(
+                    f'Неделя {week_num + 1}',
+                    ParagraphStyle(
                         f'WeekHeader_{week_num}',
                         fontName=FONT_BOLD,
-                        fontSize=10,
+                        fontSize=11,
                         textColor=week_color,
-                        spaceBefore=6,
-                        spaceAfter=3,
+                        spaceAfter=4,
                     )
-                    elements.append(Paragraph(f'Неделя {week_num + 1}', week_header))
-                    
-                    week_item_style = ParagraphStyle(
-                        f'WeekItem_{week_num}',
-                        fontName=FONT_NAME,
-                        fontSize=9,
-                        textColor=Colors.TEXT_PRIMARY,
-                        leftIndent=5,
-                        spaceAfter=2,
-                    )
-                    for item in week_items:
-                        clean_item = item.lstrip("[]▸• 0123456789.")
-                        elements.append(Paragraph(f'<font color="{week_color.hexval()}">•</font> {clean_item[:90]}', week_item_style))
+                )
+                cell_content.append(week_header)
+                
+                # Задачи
+                week_item_style = ParagraphStyle(
+                    f'WeekItem_{week_num}',
+                    fontName=FONT_NAME,
+                    fontSize=9,
+                    textColor=Colors.TEXT_PRIMARY,
+                    leading=11,
+                    spaceAfter=2,
+                )
+                
+                if not week_items:
+                     cell_content.append(Paragraph("• Закрепление материала", week_item_style))
+                
+                for item in week_items:
+                    clean_item = item.lstrip("[]▸• 0123456789.")
+                    if clean_item:
+                         cell_content.append(Paragraph(f'• {clean_item[:60]}...', week_item_style))
+                
+                week_cells.append(cell_content)
+
+            # Формируем таблицу 2x2
+            # Если данных меньше 4 недель, заполняем пустыми
+            while len(week_cells) < 4:
+                week_cells.append([])
+                
+            grid_data = [
+                [week_cells[0], week_cells[1]],
+                [week_cells[2], week_cells[3]]
+            ]
+            
+            week_table = Table(
+                grid_data,
+                colWidths=[85*mm, 85*mm],
+                rowHeights=None, # Автовысота
+            )
+            
+            week_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('TOPPADDING', (0, 0), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                # Границы для красоты (внутренняя сетка)
+                ('GRID', (0, 0), (-1, -1), 0.5, Colors.BORDER),
+                ('BACKGROUND', (0, 0), (-1, -1), Colors.LIGHT_BG),
+            ]))
+            
+            elements.append(week_table)
         
-        elements.append(Spacer(1, 5*mm))
+        elements.append(Spacer(1, 6*mm))
         
-        # Метрики успеха
+        # Метрики успеха (Checklist style)
         success_metrics = pdp_data.get("success_metrics", [])
         if success_metrics:
             elements.append(Paragraph("КАК ИЗМЕРИТЬ УСПЕХ", subheading_style))
             
-            metric_style = ParagraphStyle(
-                'SuccessMetric',
-                fontName=FONT_NAME,
-                fontSize=9,
-                textColor=Colors.EXCELLENT,
-                leftIndent=5,
-                spaceAfter=3,
-            )
-            for item in success_metrics[:4]:
+            for item in success_metrics[:5]:
                 clean_item = item.lstrip("[]▸• ")
-                elements.append(Paragraph(f'✓ {clean_item}', metric_style))
+                
+                # Таблица с галочкой
+                check_table = Table(
+                    [[
+                        Paragraph("✅", ParagraphStyle('CheckIcon', fontSize=10)), 
+                        Paragraph(clean_item, body_style)
+                    ]],
+                    colWidths=[8*mm, 160*mm]
+                )
+                check_table.setStyle(TableStyle([
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                ]))
+                elements.append(check_table)
+                elements.append(Spacer(1, 2*mm))
         
         elements.append(Spacer(1, 8*mm))
         
@@ -1929,28 +2075,51 @@ def generate_pdf_report(
         
         # Общий результат vs средний
         avg_score = 50  # Базовый бенчмарк
+        percentile_val = None
+        
         if benchmark_data:
             avg_score = benchmark_data.get("avg_score", 50)
+            percentile_val = benchmark_data.get("percentile")
         
         # Определяем перцентиль
-        if total >= 80:
-            percentile = "топ 5%"
-            percentile_color = Colors.EXCELLENT
-        elif total >= 70:
-            percentile = "топ 15%"
-            percentile_color = Colors.EXCELLENT
-        elif total >= 60:
-            percentile = "топ 30%"
-            percentile_color = Colors.GOOD
-        elif total >= 50:
-            percentile = "топ 50%"
-            percentile_color = Colors.GOOD
-        elif total >= 40:
-            percentile = "60-й перцентиль"
-            percentile_color = Colors.AVERAGE
+        if percentile_val is not None:
+             # Если есть точный перцентиль из БД (процент людей, которых мы обошли)
+             top_pct = 100 - percentile_val
+             if top_pct <= 1:
+                 percentile = "топ 1%"
+                 percentile_color = Colors.EXCELLENT
+             elif top_pct <= 5:
+                 percentile = "топ 5%"
+                 percentile_color = Colors.EXCELLENT
+             elif top_pct <= 20:
+                 percentile = f"топ {top_pct}%"
+                 percentile_color = Colors.GOOD
+             elif top_pct <= 50:
+                 percentile = f"топ {top_pct}%"
+                 percentile_color = Colors.GOOD
+             else:
+                 percentile = f"лучше {percentile_val}%"
+                 percentile_color = Colors.AVERAGE if percentile_val > 20 else Colors.LOW
         else:
-            percentile = "ниже среднего"
-            percentile_color = Colors.LOW
+            # Fallback (если нет данных бенчмарка)
+            if total >= 80:
+                percentile = "топ 5%"
+                percentile_color = Colors.EXCELLENT
+            elif total >= 70:
+                percentile = "топ 15%"
+                percentile_color = Colors.EXCELLENT
+            elif total >= 60:
+                percentile = "топ 30%"
+                percentile_color = Colors.GOOD
+            elif total >= 50:
+                percentile = "топ 50%"
+                percentile_color = Colors.GOOD
+            elif total >= 40:
+                percentile = "лучше 40%"
+                percentile_color = Colors.AVERAGE
+            else:
+                percentile = "ниже среднего"
+                percentile_color = Colors.LOW
         
         # Карточка с перцентилем
         percentile_card_style = ParagraphStyle(

@@ -49,7 +49,7 @@ async def send_pdf_reports(session_ids: list[int], target_id: int = None):
     try:
         from src.ai.answer_analyzer import calculate_category_scores, calibrate_scores, METRIC_NAMES_RU
         print("Answer analyzer imported.", flush=True)
-        from src.analytics import build_profile
+        from src.analytics import build_profile, get_benchmark, build_pdp
         print("Analytics imported.", flush=True)
     except Exception as e:
         print(f"Failed to import Analytics: {e}", flush=True)
@@ -99,6 +99,8 @@ async def send_pdf_reports(session_ids: list[int], target_id: int = None):
             analysis_history = s.analysis_history or []
             
             profile_data = None
+            pdp_data = None
+            benchmark_data = None
             raw_averages = None
             
             if analysis_history:
@@ -107,6 +109,7 @@ async def send_pdf_reports(session_ids: list[int], target_id: int = None):
                     calibrated = calibrate_scores(raw_scores, s.experience)
                     raw_averages = calibrated.get("raw_averages", {})
                     
+                    # Profile
                     profile = build_profile(
                         role=s.role,
                         role_name=s.role_name,
@@ -121,8 +124,32 @@ async def send_pdf_reports(session_ids: list[int], target_id: int = None):
                         "growth_areas": [METRIC_NAMES_RU.get(ga, ga) for ga in profile.growth_areas],
                         "top_competencies": profile.top_competencies,
                     }
+                    
+                    # PDP
+                    pdp = build_pdp(
+                        profile=profile,
+                        scores=calibrated,
+                        role=s.role,
+                        experience=s.experience,
+                    )
+                    pdp_data = {
+                        "focus_areas": pdp.focus_areas,
+                        "plan_30_days": pdp.plan_30_days,
+                        "metrics": pdp.success_metrics,
+                    }
+                    
+                    # Benchmark
+                    benchmark_res = await get_benchmark(
+                        db=session,
+                        role=s.role,
+                        experience=s.experience,
+                        total_score=s.total_score,
+                    )
+                    if benchmark_res.has_enough_data:
+                        benchmark_data = benchmark_res.to_dict()
+                        
                 except Exception as e:
-                    print(f"Warning: Failed to build profile data: {e}")
+                    print(f"Warning: Failed to build profile/PDP/benchmark data: {e}")
             
             try:
                 pdf_bytes = generate_pdf_report(
@@ -133,8 +160,8 @@ async def send_pdf_reports(session_ids: list[int], target_id: int = None):
                     conversation_history=conversation_history,
                     user_name=user_name,
                     profile_data=profile_data,
-                    pdp_data=None, 
-                    benchmark_data=None,
+                    pdp_data=pdp_data, 
+                    benchmark_data=benchmark_data,
                     raw_averages=raw_averages,
                 )
                 

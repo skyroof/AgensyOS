@@ -23,6 +23,55 @@ MIN_VOICE_DURATION = 3
 RECOMMENDED_VOICE_DURATION = 15
 
 
+def clean_voice_text(text: str) -> str:
+    """
+    Очистка текста от мусорных слов и пауз.
+    
+    Args:
+        text: Исходный текст
+        
+    Returns:
+        Очищенный текст
+    """
+    import re
+    
+    if not text:
+        return ""
+        
+    # 1. Удаляем явные хезитации (эээ, ммм)
+    # \b - граница слова, (?:...) - группировка без захвата
+    # re.I - игнорировать регистр
+    hesitations = [
+        r"\b(э+)\b",
+        r"\b(м+)\b",
+        r"\b(а+)\b",
+        r"\b(ну+)\b",
+        r"\b(типа)\b",
+        r"\b(короче)\b",
+        r"\b(как\s+бы)\b",
+        r"\b(в\s+общем)\b",
+        r"\b(значит)\b",
+        r"\b(собственно)\b",
+    ]
+    
+    cleaned = text
+    for pattern in hesitations:
+        # Заменяем на пробел, чтобы не склеить слова
+        cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+        
+    # 2. Удаляем множественные пробелы и переносы
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    
+    # 3. Исправляем пунктуацию (пробел перед точкой/запятой)
+    cleaned = re.sub(r"\s+([.,!?;])", r"\1", cleaned)
+    
+    # 4. Capitalize first letter
+    if cleaned:
+        cleaned = cleaned[0].upper() + cleaned[1:]
+        
+    return cleaned
+
+
 async def transcribe_voice(bot: Bot, file_id: str) -> str | None:
     """
     Транскрибировать голосовое сообщение через OpenAI Whisper API.
@@ -174,6 +223,10 @@ async def process_voice_answer(message: Message, state: FSMContext, bot: Bot):
         
         # Транскрибируем
         text = await transcribe_voice(bot, message.voice.file_id)
+        
+        # Очищаем текст (Q1 1.3: Audio Cleaning)
+        if text:
+            text = clean_voice_text(text)
         
         # Останавливаем анимацию
         progress_task.cancel()
