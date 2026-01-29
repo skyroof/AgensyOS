@@ -85,6 +85,14 @@ def main():
             in_traceback = False
             
             for line in lines:
+                # Пропускаем временные ошибки Telegram, которые не требуют перезапуска
+                if "TelegramServerError" in line and "Bad Gateway" in line:
+                    continue
+                if "TelegramNetworkError" in line:
+                    continue
+                if "Failed to fetch updates" in line and "Bad Gateway" in line:
+                    continue
+
                 if "Traceback (most recent call last):" in line:
                     in_traceback = True
                     traceback_buffer = [line]

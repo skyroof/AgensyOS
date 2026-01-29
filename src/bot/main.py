@@ -69,6 +69,9 @@ async def main():
         handlers=[log_handler],
         force=True,
     )
+    # Понижаем уровень логов для aiogram, чтобы не спамить ERROR при временных сетевых ошибках
+    logging.getLogger("aiogram.dispatcher").setLevel(logging.WARNING)
+    
     logger = logging.getLogger(__name__)
     
     # Инициализация базы данных
@@ -126,17 +129,26 @@ async def main():
         await send_admin_alert(bot, "✅ Бот успешно запущен на сервере!")
         
         # Запуск polling с авто-реконнектом при сетевых ошибках
+        retry_delay = 5
         while True:
             try:
                 await dp.start_polling(bot)
                 # Если start_polling вернул управление без ошибки — значит был штатный останов (например, SIGINT)
                 break 
-            except TelegramNetworkError as e:
-                logger.error(f"⚠️ Telegram Network Error: {e}. Retrying in 5 seconds...")
+            except (TelegramNetworkError, TelegramServerError) as e:
+                # Если это Bad Gateway или сетевая ошибка — просто ждем и пробуем снова
+                level = logging.WARNING
+                if isinstance(e, TelegramServerError) and "Bad Gateway" not in str(e):
+                    level = logging.ERROR # Другие серверные ошибки логируем как ERROR
+                
+                logger.log(level, f"⚠️ Поллинг прерван ({type(e).__name__}): {e}. Повтор через {retry_delay}с...")
+                await asyncio.sleep(retry_delay)
+                # Экспоненциальный бэкофф до 60 секунд
+                retry_delay = min(retry_delay * 2, 60)
+            except Exception as e:
+                logger.error(f"❌ Необработанная ошибка в цикле поллинга: {e}")
                 await asyncio.sleep(5)
-            except TelegramServerError as e:
-                logger.error(f"⚠️ Telegram Server Error (Bad Gateway): {e}. Retrying in 5 seconds...")
-                await asyncio.sleep(5)
+                retry_delay = 5
                 
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
