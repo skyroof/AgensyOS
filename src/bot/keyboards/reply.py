@@ -16,6 +16,7 @@ def get_role_reply_keyboard() -> ReplyKeyboardMarkup:
     builder.row(
         KeyboardButton(text="🎨 Дизайнер"),
         KeyboardButton(text="📊 Продакт"),
+        KeyboardButton(text="⚙️ Проджект"),
     )
     return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
 

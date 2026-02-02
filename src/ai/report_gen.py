@@ -99,6 +99,9 @@ async def generate_detailed_report(
         all_insights.extend(analysis.get("key_insights", []))
         all_gaps.extend(analysis.get("gaps", []))
     
+    insights_text = "\n".join('- ' + i for i in all_insights[:10]) if all_insights else '- Нет данных'
+    gaps_text = "\n".join('- ' + g for g in all_gaps[:5]) if all_gaps else '- Не выявлено'
+
     user_prompt = f"""Проанализируй кандидата и напиши детальный отчёт.
 
 ПРОФИЛЬ КАНДИДАТА:
@@ -113,10 +116,10 @@ async def generate_detailed_report(
 - ИТОГО: {scores['total']}/100
 
 КЛЮЧЕВЫЕ НАБЛЮДЕНИЯ ИЗ АНАЛИЗА:
-{chr(10).join('- ' + i for i in all_insights[:10]) if all_insights else '- Нет данных'}
+{insights_text}
 
 ВЫЯВЛЕННЫЕ ПРОБЕЛЫ:
-{chr(10).join('- ' + g for g in all_gaps[:5]) if all_gaps else '- Не выявлено'}
+{gaps_text}
 
 ПОЛНЫЙ ДИАЛОГ:
 {dialog_text}
@@ -188,6 +191,9 @@ async def stream_detailed_report(
         all_insights.extend(analysis.get("key_insights", []))
         all_gaps.extend(analysis.get("gaps", []))
     
+    insights_text_stream = "\n".join('- ' + i for i in all_insights[:10]) if all_insights else '- Нет данных'
+    gaps_text_stream = "\n".join('- ' + g for g in all_gaps[:5]) if all_gaps else '- Не выявлено'
+
     user_prompt = f"""Проанализируй кандидата и напиши детальный отчёт.
 
 ПРОФИЛЬ КАНДИДАТА:
@@ -202,10 +208,10 @@ async def stream_detailed_report(
 - ИТОГО: {scores['total']}/100
 
 КЛЮЧЕВЫЕ НАБЛЮДЕНИЯ ИЗ АНАЛИЗА:
-{chr(10).join('- ' + i for i in all_insights[:10]) if all_insights else '- Нет данных'}
+{insights_text_stream}
 
 ВЫЯВЛЕННЫЕ ПРОБЕЛЫ:
-{chr(10).join('- ' + g for g in all_gaps[:5]) if all_gaps else '- Не выявлено'}
+{gaps_text_stream}
 
 ПОЛНЫЙ ДИАЛОГ:
 {dialog_text}

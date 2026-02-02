@@ -127,6 +127,16 @@ RESOURCES_DB = {
             Resource("article", "Lenny's Newsletter", "https://lennysnewsletter.com",
                     "Лучшие практики от топовых PM", "1 час/неделю", "easy", "en", True, 2),
         ],
+        "project": [
+            Resource("book", "PMBOK Guide", "PMI", "",
+                    "Фундаментальный свод знаний по управлению проектами", "20 часов", "hard", "en", False, 1),
+            Resource("book", "Deadline. Роман об управлении проектами", "Том ДеМарко", "",
+                    "Классика про риски, команду и сроки в художественной форме", "6 часов", "easy", "ru", False, 1),
+            Resource("course", "PMP Certification Training", "https://pmi.org",
+                    "Золотой стандарт для менеджеров проектов", "3 месяца", "hard", "en", False, 1),
+            Resource("practice", "Аудит текущего проекта", "",
+                    "Проведи SWOT-анализ и ревизию рисков проекта", "4 часа", "medium", "ru", True, 2),
+        ],
     },
     
     "methodology": {
@@ -150,6 +160,16 @@ RESOURCES_DB = {
             Resource("practice", "Weekly Metrics Review", "",
                     "Еженедельный разбор метрик продукта", "1 час/неделю", "easy", "ru", True, 2),
         ],
+        "project": [
+            Resource("book", "Scrum: The Art of Doing Twice the Work in Half the Time", "Jeff Sutherland", "",
+                    "Основы Scrum от его создателя", "5 часов", "easy", "ru", False, 1),
+            Resource("course", "Agile Project Management Certificate", "https://google.com/cert",
+                    "Сертификация от Google по Agile", "4 недели", "medium", "en", False, 1),
+            Resource("book", "Критическая цепь", "Элияху Голдратт", "",
+                    "Теория ограничений в управлении проектами", "7 часов", "medium", "ru", False, 2),
+            Resource("practice", "Внедрение Kanban", "",
+                    "Визуализируй поток работ и начни управлять WIP-лимитами", "1 неделя", "medium", "ru", True, 1),
+        ],
     },
     
     "tools_proficiency": {
@@ -172,6 +192,16 @@ RESOURCES_DB = {
                     "Запусти и проанализируй 3 A/B теста", "4-8 недель", "medium", "ru", True, 1),
             Resource("course", "Python для анализа данных", "https://practicum.yandex.ru",
                     "Автоматизация аналитики", "3 месяца", "hard", "ru", False, 3),
+        ],
+        "project": [
+            Resource("course", "Jira Masterclass", "https://udemy.com",
+                    "Глубокая настройка процессов в Jira/Confluence", "12 часов", "medium", "en", False, 1),
+            Resource("tool", "Notion for Project Management", "",
+                    "Построение Second Brain для ведения проектов", "5 часов", "easy", "en", True, 1),
+            Resource("practice", "Автоматизация отчетности", "",
+                    "Настрой автоматический сбор статусов проекта в Slack/Email", "3 часа", "medium", "ru", True, 2),
+            Resource("tool", "Miro / Lucidchart", "",
+                    "Визуализация сложных процессов и диаграмм Ганта", "—", "easy", "ru", True, 2),
         ],
     },
     
@@ -523,8 +553,8 @@ def _get_resources_for_metric(metric: str, role: str) -> list[Resource]:
     if "all" in metric_resources:
         return metric_resources["all"]
     
-    # Если для роли designer нет, пробуем product и наоборот
-    for r in ["designer", "product"]:
+    # Если для роли designer нет, пробуем product, потом project и наоборот
+    for r in ["designer", "product", "project"]:
         if r in metric_resources:
             return metric_resources[r]
     

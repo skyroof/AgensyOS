@@ -13,6 +13,9 @@ def get_role_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📊 Продакт", callback_data="role:product"),
     )
     builder.row(
+        InlineKeyboardButton(text="⚙️ Проджект", callback_data="role:project"),
+    )
+    builder.row(
         InlineKeyboardButton(text="💳 Баланс / Купить", callback_data="show_balance"),
     )
     return builder.as_markup()

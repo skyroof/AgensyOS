@@ -314,6 +314,7 @@ def get_analysis_prompt(question: str, answer: str, role: str) -> list[dict]:
     role_context = {
         "designer": "UI/UX дизайнера",
         "product": "продакт-менеджера",
+        "project": "проджект-менеджера",
     }
     
     user_prompt = f"""Проанализируй ответ кандидата на позицию {role_context.get(role, 'специалиста')}.

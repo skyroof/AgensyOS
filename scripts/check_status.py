@@ -12,16 +12,21 @@ def check_status():
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     
+    password = os.getenv("SSH_PASSWORD")
+    
     try:
         print(f"🔌 Connecting to {HOST}...")
-        client.connect(hostname=HOST, username=USER, key_filename=KEY_PATH)
+        if password:
+            client.connect(hostname=HOST, username=USER, password=password)
+        else:
+            client.connect(hostname=HOST, username=USER, key_filename=KEY_PATH)
         
         stdin, stdout, stderr = client.exec_command("docker ps")
         print("\n🐳 Docker Containers:")
         print(stdout.read().decode())
         
-        stdin, stdout, stderr = client.exec_command("docker logs --tail 20 diagnostic-bot")
-        print("\n📜 Last 20 logs from diagnostic-bot:")
+        stdin, stdout, stderr = client.exec_command("docker logs --tail 100 diagnostic-bot")
+        print("\n📜 Last 100 logs from diagnostic-bot:")
         print(stdout.read().decode())
         print(stderr.read().decode()) # docker logs often go to stderr
         

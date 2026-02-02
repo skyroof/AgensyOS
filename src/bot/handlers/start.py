@@ -303,6 +303,10 @@ async def process_goal(callback: CallbackQuery, state: FSMContext):
 • Strategy, Metrics, Unit Economics
 • Оценка лидерства и системного мышления
 
+⚙️ <b>Проджект-менеджер</b>
+• Delivery, Risk Management, Timelines
+• Оценка планирования и взаимодействия
+
 👇 <b>Кто ты?</b>
 """
 
@@ -321,8 +325,16 @@ async def process_role(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
     except Exception:
         pass
+    
     role = callback.data.split(":")[1]
-    role_name = "Дизайнер" if role == "designer" else "Продакт-менеджер"
+    
+    role_names = {
+        "designer": "Дизайнер",
+        "product": "Продакт-менеджер",
+        "project": "Проджект-менеджер",
+    }
+    
+    role_name = role_names.get(role, "Специалист")
 
     await state.update_data(role=role, role_name=role_name)
 

@@ -265,6 +265,11 @@ DEVELOPMENT_RESOURCES = {
             {"type": "course", "title": "Reforge Product Strategy", "reason": "Продвинутая стратегия продукта"},
             {"type": "practice", "title": "Разбор продуктовых кейсов (Lenny's Newsletter)", "reason": "Насмотренность"},
         ],
+        "project": [
+            {"type": "book", "title": "PMBOK Guide — PMI", "reason": "Золотой стандарт управления проектами"},
+            {"type": "course", "title": "PMP Certification Prep", "reason": "Подготовка к сертификации"},
+            {"type": "practice", "title": "Построение Critical Path для проекта", "reason": "Навык планирования"},
+        ],
     },
     "methodology": {
         "designer": [
@@ -275,6 +280,10 @@ DEVELOPMENT_RESOURCES = {
             {"type": "book", "title": "Lean Analytics — Alistair Croll", "reason": "Метрики и аналитика"},
             {"type": "course", "title": "Product Analytics Micro-Certification", "reason": "Работа с данными"},
         ],
+        "project": [
+            {"type": "book", "title": "Scrum: The Art of Doing Twice the Work in Half the Time", "reason": "Основы Agile"},
+            {"type": "course", "title": "Agile/Scrum Master Certification", "reason": "Гибкие методологии"},
+        ],
     },
     "tools_proficiency": {
         "designer": [
@@ -284,6 +293,10 @@ DEVELOPMENT_RESOURCES = {
         "product": [
             {"type": "course", "title": "SQL для продактов", "reason": "Самостоятельная работа с данными"},
             {"type": "practice", "title": "A/B тестирование на реальных фичах", "reason": "Эксперименты"},
+        ],
+        "project": [
+            {"type": "course", "title": "Jira & Confluence Masterclass", "reason": "Настройка процессов"},
+            {"type": "practice", "title": "Создание Dashboard в Jira для контроля KPI", "reason": "Навык мониторинга"},
         ],
     },
     # Soft Skills
