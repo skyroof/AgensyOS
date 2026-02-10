@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError
 
 from src.db.models import (
     User,
@@ -190,5 +191,15 @@ async def process_user_digest(session: AsyncSession, bot: Bot, user_id: int) -> 
         session.add(history)
         await session.commit()
 
+    except TelegramForbiddenError:
+        logger.warning(f"User {user_id} has blocked the bot. Deactivating subscription.")
+        # Deactivate subscription
+        sub_stmt = select(UserSubscription).where(UserSubscription.user_id == user_id)
+        sub_result = await session.execute(sub_stmt)
+        subscription = sub_result.scalars().first()
+        if subscription:
+            subscription.is_active = False
+            await session.commit()
+            
     except Exception as e:
         logger.error(f"Failed to send digest to telegram_id {user.telegram_id}: {e}")

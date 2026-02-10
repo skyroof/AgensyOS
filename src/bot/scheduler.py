@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -230,6 +231,9 @@ async def send_diagnostic_reminders(bot: Bot) -> int:
                     # Небольшая задержка между сообщениями
                     await asyncio.sleep(0.5)
 
+                except TelegramForbiddenError:
+                    logger.warning(f"User {reminder.user_id} blocked bot. Marking reminder {reminder.id} as sent.")
+                    await mark_reminder_sent(db, reminder.id)
                 except Exception as e:
                     logger.error(f"Failed to send reminder {reminder.id}: {e}")
                     continue
@@ -329,6 +333,16 @@ async def send_daily_pdp_tasks(bot: Bot) -> int:
 
                     sent_count += 1
 
+                except TelegramForbiddenError:
+                    logger.warning(f"User {plan.user_id} blocked bot. Skipping PDP task.")
+                    # Mark as sent to avoid retry
+                    await session.execute(
+                        update(PdpTask)
+                        .where(PdpTask.id == task.id)
+                        .values(status="sent")
+                    )
+                    await session.commit()
+
                 except Exception as e:
                     logger.error(f"Failed to send PDP task to user {plan.user.telegram_id} (id={plan.user_id}): {e}")
 
@@ -377,6 +391,10 @@ async def send_task_reminders(bot: Bot) -> int:
                     await mark_task_reminder_sent(db, reminder.id)
                     sent_count += 1
                     
+                except TelegramForbiddenError:
+                    logger.warning(f"User {reminder.user_id} blocked bot. Marking task reminder {reminder.id} as sent.")
+                    await mark_task_reminder_sent(db, reminder.id)
+
                 except Exception as e:
                     logger.error(f"Failed to send task reminder {reminder.id}: {e}")
                     # If user blocked bot, mark as sent to avoid loop
